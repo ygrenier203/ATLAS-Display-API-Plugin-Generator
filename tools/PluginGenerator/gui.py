@@ -558,6 +558,8 @@ namespace {namespace}
     {{
         private double maximum = double.NaN;
         private double minimum = double.NaN;
+        private double average = double.NaN;
+        private long? currentTimestamp;
 {current_value_field}
         private string name;
         private int sampleCount;
@@ -597,6 +599,19 @@ namespace {namespace}
             private set => this.SetProperty(ref this.maximum, value);
         }}
 
+        public double Average
+        {{
+            get => this.average;
+            private set => this.SetProperty(ref this.average, value);
+        }}
+
+        [Browsable(false)]
+        public long? CurrentTimestamp
+        {{
+            get => this.currentTimestamp;
+            private set => this.SetProperty(ref this.currentTimestamp, value);
+        }}
+
 {current_value_property}
 
         [Browsable(false)]
@@ -621,6 +636,7 @@ namespace {namespace}
             this.SampleCount = validValues.Length;
             this.Minimum = validValues.Length == 0 ? double.NaN : validValues.Min();
             this.Maximum = validValues.Length == 0 ? double.NaN : validValues.Max();
+            this.Average = validValues.Length == 0 ? double.NaN : validValues.Average();
         }}
 
 {current_value_update_method}
@@ -657,6 +673,7 @@ CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(S
             {
                 var parameterValues = signal.Data.ParameterValues;
                 double value;
+                long timestamp;
                 parameterValues.Lock();
                 try
                 {
@@ -666,6 +683,7 @@ CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(S
                     }
 
                     value = parameterValues.Data[0];
+                    timestamp = parameterValues.Timestamp[0];
                 }
                 finally
                 {
@@ -681,7 +699,7 @@ CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(S
                 {
                     var series = this.Series.FirstOrDefault(item =>
                         item.ParameterIdentifier == signal.Data.Request.RequestId);
-                    series?.UpdateCurrentValue(value);
+                    series?.UpdateCurrentValue(value, timestamp);
                 });
             }
             catch (Exception exception)
@@ -698,9 +716,10 @@ CURRENT_VALUE_PROPERTY = '''        public double CurrentValue
             private set => this.SetProperty(ref this.currentValue, value);
         }'''
 
-CURRENT_VALUE_UPDATE_METHOD = '''        public void UpdateCurrentValue(double value)
+CURRENT_VALUE_UPDATE_METHOD = '''        public void UpdateCurrentValue(double value, long timestamp)
         {
             this.CurrentValue = value;
+            this.CurrentTimestamp = timestamp;
         }'''
 
 CURRENT_VALUE_TEXT = '''                            <TextBlock Text="{Binding CurrentValue, StringFormat='Current: {0:F3}'}"
@@ -1038,6 +1057,14 @@ namespace {namespace}
         public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
         {{
             drawingContext.DrawRectangle(Brushes.Transparent, new Pen(Brushes.DimGray, 1), new Rect(extents));
+            var gridPen = new Pen(Brushes.DimGray, 0.5);
+            for (var division = 1; division < 5; division++)
+            {{
+                var x = (extents.Width * division) / 5;
+                var y = (extents.Height * division) / 5;
+                drawingContext.DrawLine(gridPen, new Point(x, 0), new Point(x, extents.Height));
+                drawingContext.DrawLine(gridPen, new Point(0, y), new Point(extents.Width, y));
+            }}
             if (extents.Width <= 0 || extents.Height <= 0)
             {{
                 return;
@@ -1056,6 +1083,24 @@ namespace {namespace}
             {{
                 this.DrawSeries(drawingContext, extents, item, start, timeRange);
             }}
+        }}
+
+        public void DrawCursor(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series, long? timestamp)
+        {{
+            if (!timestamp.HasValue || series.Count == 0 || series[0].Timestamps.Count < 2)
+            {{
+                return;
+            }}
+
+            var start = series.Min(item => item.Timestamps.First());
+            var end = series.Max(item => item.Timestamps.Last());
+            if (timestamp.Value < start || timestamp.Value > end)
+            {{
+                return;
+            }}
+
+            var x = ((timestamp.Value - start) / (double)Math.Max(1, end - start)) * extents.Width;
+            drawingContext.DrawLine(new Pen(Brushes.White, 1), new Point(x, 0), new Point(x, extents.Height));
         }}
 
         private void DrawSeries(DrawingContext drawingContext, Size extents, GraphSeries series, long start, long timeRange)
@@ -1194,7 +1239,10 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                 <ColumnDefinition Width="240" />
             </Grid.ColumnDefinitions>
             <Border Margin="6" BorderBrush="DimGray" BorderThickness="1">
-                <displayPluginLibrary:VisualLayer x:Name="GraphVisualLayer" />
+                <Grid>
+                    <displayPluginLibrary:VisualLayer x:Name="GraphVisualLayer" />
+                    <displayPluginLibrary:VisualLayer x:Name="CursorVisualLayer" />
+                </Grid>
             </Border>
             <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
                 <ItemsControl ItemsSource="{{Binding Series}}">
@@ -1206,6 +1254,7 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
 {current_value_text}
                                     <TextBlock Text="{{Binding Minimum, StringFormat='Minimum: {{0:F3}}'}}" Foreground="White" />
                                     <TextBlock Text="{{Binding Maximum, StringFormat='Maximum: {{0:F3}}'}}" Foreground="White" />
+                                    <TextBlock Text="{{Binding Average, StringFormat='Average: {{0:F3}}'}}" Foreground="White" />
                                     <TextBlock Text="{{Binding SampleCount, StringFormat='Samples: {{0}}'}}" Foreground="White" />
                                 </StackPanel>
                             </Border>
@@ -1911,7 +1960,8 @@ namespace {namespace}
         private void OnSeriesPropertyChanged(object sender, PropertyChangedEventArgs args)
         {{
             if (args.PropertyName == nameof(TimebaseSeriesViewModel.Values) ||
-                args.PropertyName == nameof(TimebaseSeriesViewModel.Timestamps))
+                args.PropertyName == nameof(TimebaseSeriesViewModel.Timestamps) ||
+                args.PropertyName == nameof(TimebaseSeriesViewModel.CurrentTimestamp))
             {{
                 this.Redraw();
             }}
@@ -1940,6 +1990,13 @@ namespace {namespace}
                 item.Values,
                 Palette[index % Palette.Length])).ToList() ?? new List<GraphSeries>();
             visual.Draw(context => this.graphRenderer.Draw(context, visual.Extents, series));
+            var cursorVisual = this.CursorVisualLayer.Visual;
+            var cursorTimestamp = this.viewModel?.Series.Select(item => item.CurrentTimestamp).FirstOrDefault(value => value.HasValue);
+            cursorVisual.Draw(context => this.graphRenderer.DrawCursor(
+                context,
+                cursorVisual.Extents,
+                series,
+                cursorTimestamp));
         }}
     }}
 }}

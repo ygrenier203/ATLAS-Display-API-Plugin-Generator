@@ -87,6 +87,8 @@ Graph generation uses reusable native WPF `DrawingContext` templates derived fro
 
 Visible-range and combined cursor/range plugins can select the `time-series` graph. It draws every configured ATLAS parameter as a separate colored trace and places live minimum, maximum, sample count, and optional cursor values in a side panel. Use `--graph time-series` from the CLI.
 
+Generated time graphs include a grid, automatic per-series scaling, a color legend through the statistics cards, minimum/maximum/average/sample-count statistics, and a cursor overlay for combined cursor/range plugins.
+
 Basic displays can choose a starter **View layout**: `text`, `form`, `list`, `table`, or `blank`. List and table layouts automatically generate the starter item collection required by their bindings. Use `--behavior basic --layout table` from the CLI.
 
 The basic `form` layout automatically creates a labeled WPF editor for every configured display property. Boolean properties use checkboxes; strings, integers, and numbers use text boxes with immediate binding updates.

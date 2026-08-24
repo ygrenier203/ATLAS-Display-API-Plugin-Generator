@@ -486,6 +486,9 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('new GraphSeries(', codebehind)
         self.assertIn('item.Timestamps', codebehind)
         self.assertIn('item.Values', codebehind)
+        self.assertIn('CursorVisualLayer', view)
+        self.assertIn('DrawCursor(', codebehind)
+        self.assertIn('Average:', view)
         ET.parse(view_path)
 
     def test_time_graph_requires_visible_range_behavior(self):
