@@ -773,15 +773,9 @@ ITEM_VIEWMODEL_TEMPLATE = '''using MAT.Atlas.Api.Core.Presentation;
 
 namespace {namespace}
 {{
-    public sealed class ItemViewModel : BindableBase
+    public sealed class {item_class_name} : BindableBase
     {{
-        private string name = string.Empty;
-
-        public string Name
-        {{
-            get => this.name;
-            set => this.SetProperty(ref this.name, value);
-        }}
+{item_members}
     }}
 }}
 '''
@@ -904,7 +898,8 @@ def build_property_control(spec):
     )
 
 
-def build_basic_layout_content(layout, view_class, command_buttons, display_property_specs=None):
+def build_basic_layout_content(layout, view_class, command_buttons, display_property_specs=None,
+                               collection_name='Items', item_display_field='Name'):
     if layout not in BASIC_LAYOUTS:
         raise ValueError(f'Unknown basic view layout: {layout}')
     commands = (
@@ -915,9 +910,11 @@ def build_basic_layout_content(layout, view_class, command_buttons, display_prop
     if layout == 'blank':
         return commands.rstrip()
     if layout == 'list':
-        body = BASIC_ITEM_COLLECTION_CONTENT
+        body = BASIC_ITEM_COLLECTION_CONTENT.replace(
+            '{Binding Items}', f'{{Binding {collection_name}}}'
+        ).replace('{Binding Name}', f'{{Binding {item_display_field}}}')
     elif layout == 'table':
-        body = '        <DataGrid ItemsSource="{Binding Items}" AutoGenerateColumns="True" Margin="4" />'
+        body = f'        <DataGrid ItemsSource="{{Binding {collection_name}}}" AutoGenerateColumns="True" Margin="4" />'
     elif layout == 'form':
         controls = ''.join(build_property_control(spec) for spec in (display_property_specs or []))
         if not controls:
@@ -1493,6 +1490,35 @@ def build_status_state():
     return fields, properties
 
 
+def build_item_field_spec(value):
+    parts = [part.strip() for part in str(value or '').split(':', 1)]
+    name = parts[0]
+    property_type = parts[1].lower() if len(parts) == 2 else 'string'
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
+        raise ValueError('Item field name must be a valid C# identifier.')
+    if property_type not in DISPLAY_PROPERTY_TYPES.values():
+        raise ValueError(f'Unsupported item field type: {property_type}')
+    return {'name': name, 'type': property_type}
+
+
+def build_item_members(field_specs):
+    defaults = {'string': ' = string.Empty', 'int': '', 'double': '', 'bool': ''}
+    blocks = []
+    for spec in field_specs:
+        name = spec['name']
+        field = to_camel_case(name)
+        property_type = spec['type']
+        blocks.append(
+            f'        private {property_type} {field}{defaults[property_type]};\n\n'
+            f'        public {property_type} {name}\n'
+            '        {\n'
+            f'            get => this.{field};\n'
+            f'            set => this.SetProperty(ref this.{field}, value);\n'
+            '        }'
+        )
+    return '\n\n'.join(blocks)
+
+
 def build_lifecycle_hooks(atlas_parameters, include_hooks):
     if not atlas_parameters and not include_hooks:
         return ''
@@ -1560,7 +1586,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     description=None, library_project=None, icon_path=None, service_names=None,
                     include_status_state=False, include_lifecycle_hooks=False,
                     include_session_notifications=False, include_item_collection=False,
-                    basic_layout='text'):
+                    basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
+                    item_field_specs=None):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -1587,6 +1614,15 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     if include_item_collection and basic_layout == 'text':
         basic_layout = 'list'
     include_item_collection = include_item_collection or basic_layout in ('list', 'table')
+    item_field_specs = list(item_field_specs or [build_item_field_spec('Name:string')])
+    for label, identifier in (('Collection name', collection_name), ('Item class name', item_class_name)):
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', identifier or ''):
+            raise ValueError(f'{label} must be a valid C# identifier.')
+    if not item_field_specs:
+        raise ValueError('At least one item field is required.')
+    field_names = [spec['name'] for spec in item_field_specs]
+    if len(field_names) != len(set(field_names)):
+        raise ValueError('Item field names must be unique.')
     if len(atlas_parameters) > parameter_max_count:
         raise ValueError('Maximum parameter count cannot be lower than the number of ATLAS parameters.')
     namespace = name
@@ -1696,8 +1732,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     session_notification_hooks = build_session_notification_hooks() if include_session_notifications else ''
     item_collection_property = (
         '        [Browsable(false)]\n'
-        '        public ObservableCollection<ItemViewModel> Items { get; } =\n'
-        '            new ObservableCollection<ItemViewModel>();\n'
+        f'        public ObservableCollection<{item_class_name}> {collection_name} {{ get; }} =\n'
+        f'            new ObservableCollection<{item_class_name}>();\n'
         if include_item_collection else ''
     )
     if include_parameters:
@@ -1765,7 +1801,11 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             namespace=namespace,
         )
     elif include_item_collection:
-        files['ItemViewModel.cs'] = ITEM_VIEWMODEL_TEMPLATE.format(namespace=namespace)
+        files[f'{item_class_name}.cs'] = ITEM_VIEWMODEL_TEMPLATE.format(
+            namespace=namespace,
+            item_class_name=item_class_name,
+            item_members=build_item_members(item_field_specs),
+        )
     if include_view:
         files[f'{name}View.xaml'] = view_template.format(
             namespace=namespace,
@@ -1777,6 +1817,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 f'{name}View',
                 command_buttons,
                 display_property_specs,
+                collection_name,
+                item_field_specs[0]['name'],
             ),
         )
         files[f'{name}View.xaml.cs'] = VIEW_CODEBEHIND_TEMPLATE.format(
@@ -2074,6 +2116,19 @@ class PluginGeneratorApp(tk.Tk):
             variable=self.item_collection_var,
         )
         self.item_collection_checkbutton.grid(row=6, column=0, columnspan=2, sticky='w', pady=4)
+
+        tk.Label(advanced_frame, text='Collection name:').grid(row=7, column=0, sticky='w', pady=4)
+        self.collection_name_var = tk.StringVar(value='Items')
+        self.collection_name_entry = tk.Entry(advanced_frame, textvariable=self.collection_name_var, width=24)
+        self.collection_name_entry.grid(row=7, column=1, sticky='w', padx=8)
+        tk.Label(advanced_frame, text='Item class name:').grid(row=8, column=0, sticky='w', pady=4)
+        self.item_class_name_var = tk.StringVar(value='ItemViewModel')
+        self.item_class_name_entry = tk.Entry(advanced_frame, textvariable=self.item_class_name_var, width=24)
+        self.item_class_name_entry.grid(row=8, column=1, sticky='w', padx=8)
+        tk.Label(advanced_frame, text='Item fields (Name:type, comma separated):').grid(row=9, column=0, sticky='w', pady=4)
+        self.item_fields_var = tk.StringVar(value='Name:string')
+        self.item_fields_entry = tk.Entry(advanced_frame, textvariable=self.item_fields_var, width=36)
+        self.item_fields_entry.grid(row=9, column=1, sticky='ew', padx=8)
         
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
@@ -2382,6 +2437,9 @@ class PluginGeneratorApp(tk.Tk):
         self.lifecycle_hooks_var.set(False)
         self.session_notifications_var.set(False)
         self.item_collection_var.set(False)
+        self.collection_name_var.set('Items')
+        self.item_class_name_var.set('ItemViewModel')
+        self.item_fields_var.set('Name:string')
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
@@ -2406,6 +2464,9 @@ class PluginGeneratorApp(tk.Tk):
             self.basic_layout_combo.config(state='readonly' if not parameters_enabled else 'disabled')
             if parameters_enabled:
                 self.basic_layout_var.set('text')
+        for widget_name in ('collection_name_entry', 'item_class_name_entry', 'item_fields_entry'):
+            if hasattr(self, widget_name):
+                getattr(self, widget_name).config(state=tk.NORMAL if not parameters_enabled else tk.DISABLED)
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output and library paths?'):
@@ -2443,6 +2504,11 @@ class PluginGeneratorApp(tk.Tk):
             display_property_specs = list(self.display_property_specs)
             command_specs = list(self.command_specs)
             parameter_max_count = int(self.parameter_max_var.get())
+            item_field_specs = [
+                build_item_field_spec(value)
+                for value in self.item_fields_var.get().split(',')
+                if value.strip()
+            ]
             if atlas_parameters and not include_parameters:
                 raise ValueError('ATLAS parameters require Current value or Visible range behavior.')
             service_names = [name for name, var in self.service_vars.items() if var.get()]
@@ -2461,6 +2527,9 @@ class PluginGeneratorApp(tk.Tk):
                 include_session_notifications=self.session_notifications_var.get(),
                 include_item_collection=self.item_collection_var.get(),
                 basic_layout=self.basic_layout_var.get(),
+                collection_name=self.collection_name_var.get().strip(),
+                item_class_name=self.item_class_name_var.get().strip(),
+                item_field_specs=item_field_specs,
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,

@@ -21,6 +21,8 @@ from tools.PluginGenerator.gui import (
     build_lifecycle_hooks,
     build_basic_layout_content,
     build_property_control,
+    build_item_field_spec,
+    build_item_members,
     build_session_notification_hooks,
     build_display_property,
     build_display_property_field,
@@ -189,6 +191,14 @@ class ParameterAndPropertyTests(unittest.TestCase):
             build_property_control(number),
         )
 
+    def test_item_fields_generate_typed_notifying_properties(self):
+        fields = [build_item_field_spec('Label:string'), build_item_field_spec('Value:double')]
+        source = build_item_members(fields)
+
+        self.assertIn('public string Label', source)
+        self.assertIn('public double Value', source)
+        self.assertEqual(2, source.count('this.SetProperty('))
+
 
 class GenerationTests(unittest.TestCase):
     def generate(self, **options):
@@ -289,6 +299,28 @@ class GenerationTests(unittest.TestCase):
 
         self.assertIn('ObservableCollection<ItemViewModel> Items', viewmodel)
         self.assertIn('DataGrid ItemsSource="{Binding Items}"', view)
+
+    def test_collection_names_and_item_fields_are_configurable(self):
+        target = self.generate(
+            include_parameters=False,
+            basic_layout='list',
+            collection_name='Readings',
+            item_class_name='ReadingViewModel',
+            item_field_specs=[
+                build_item_field_spec('Channel:string'),
+                build_item_field_spec('Value:double'),
+            ],
+        )
+        project = target / 'SeparationPlugin'
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+        item = (project / 'ReadingViewModel.cs').read_text(encoding='utf-8')
+        view = (project / 'SeparationPluginView.xaml').read_text(encoding='utf-8')
+
+        self.assertIn('ObservableCollection<ReadingViewModel> Readings', viewmodel)
+        self.assertIn('public string Channel', item)
+        self.assertIn('public double Value', item)
+        self.assertIn('ItemsSource="{Binding Readings}"', view)
+        self.assertIn('Text="{Binding Channel}"', view)
 
     def test_form_layout_generates_display_property_controls(self):
         properties = [

@@ -35,6 +35,9 @@ def run(args=None):
 	parser.add_argument('--session-notifications', action='store_true', help='generate session loaded, unloaded, and set-change overrides')
 	parser.add_argument('--item-collection', action='store_true', help='generate a starter Items collection for a basic display')
 	parser.add_argument('--layout', choices=('text', 'form', 'list', 'table', 'blank'), default='text', help='starter view layout for a basic display')
+	parser.add_argument('--collection-name', default='Items', help='starter collection property name')
+	parser.add_argument('--item-class', default='ItemViewModel', help='starter collection item class name')
+	parser.add_argument('--item-field', action='append', default=[], help='item field as Name:type; repeat for multiple fields')
 	parser.add_argument('--clear-settings', action='store_true', help='clear persisted paths used by the generator and exit')
 	options = parser.parse_args(args)
 
@@ -46,6 +49,7 @@ def run(args=None):
 		BEHAVIOR_VISIBLE_RANGE,
 		build_generated_plugin,
 		build_command_spec,
+		build_item_field_spec,
 		clear_settings,
 		default_output_folder,
 		default_workspace_root,
@@ -98,6 +102,10 @@ def run(args=None):
 			parser.error(str(error))
 		command_specs.append(command_spec)
 		command_names.add(command_spec['name'])
+	try:
+		item_field_specs = [build_item_field_spec(value) for value in options.item_field]
+	except ValueError as error:
+		parser.error(str(error))
 	target = generate_plugin(
 		options.name,
 		output,
@@ -111,6 +119,9 @@ def run(args=None):
 		include_session_notifications=options.session_notifications,
 		include_item_collection=options.item_collection,
 		basic_layout=options.layout,
+		collection_name=options.collection_name,
+		item_class_name=options.item_class,
+		item_field_specs=item_field_specs or None,
 		parameter_max_count=options.max_parameters,
 		workspace_root=default_workspace_root(),
 		library_project=library_project,

@@ -67,6 +67,8 @@ Enable **Generate session notification hooks** to add callbacks for sessions loa
 
 Basic displays can enable **Generate starter item collection** to create an `ObservableCollection<ItemViewModel>`, a notifying item class, and a bound WPF `ItemsControl`. This provides a working list structure ready for custom fields and population logic. The CLI equivalent is `--behavior basic --item-collection`.
 
+The collection property name, item class name, and typed item fields are configurable. Enter fields as comma-separated `Name:type` values in the GUI, or repeat `--item-field`, for example `--collection-name Readings --item-class ReadingViewModel --item-field Channel:string --item-field Value:double`.
+
 Basic displays can choose a starter **View layout**: `text`, `form`, `list`, `table`, or `blank`. List and table layouts automatically generate the starter item collection required by their bindings. Use `--behavior basic --layout table` from the CLI.
 
 The basic `form` layout automatically creates a labeled WPF editor for every configured display property. Boolean properties use checkboxes; strings, integers, and numbers use text boxes with immediate binding updates.
