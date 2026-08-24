@@ -9,6 +9,26 @@ import shutil
 import subprocess
 import uuid
 
+PRESET_VERSION = 1
+
+
+def save_preset(path, configuration):
+    payload = {'version': PRESET_VERSION, 'configuration': configuration}
+    with open(path, 'w', encoding='utf-8') as stream:
+        json.dump(payload, stream, indent=2)
+        stream.write('\n')
+
+
+def load_preset(path):
+    with open(path, 'r', encoding='utf-8') as stream:
+        payload = json.load(stream)
+    if not isinstance(payload, dict) or payload.get('version') != PRESET_VERSION:
+        raise ValueError('Unsupported or invalid PluginGenerator preset.')
+    configuration = payload.get('configuration')
+    if not isinstance(configuration, dict):
+        raise ValueError('Preset configuration must be a JSON object.')
+    return configuration
+
 
 CS_PROJ_TEMPLATE = r'''<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -2140,6 +2160,8 @@ class PluginGeneratorApp(tk.Tk):
                  bg='#2196F3', fg='white', font=('Arial', 10), padx=20, pady=10).pack(side=tk.LEFT, padx=4)
         tk.Button(button_frame, text='Clear Saved Paths', command=self.clear_saved_paths,
              bg='#FF9800', fg='white', font=('Arial', 10), padx=20, pady=10).pack(side=tk.LEFT, padx=4)
+        tk.Button(button_frame, text='Save Preset', command=self.save_preset_dialog).pack(side=tk.LEFT, padx=4)
+        tk.Button(button_frame, text='Load Preset', command=self.load_preset_dialog).pack(side=tk.LEFT, padx=4)
         tk.Button(button_frame, text='Exit', command=self.quit, 
                  bg='#f44336', fg='white', font=('Arial', 10), padx=20, pady=10).pack(side=tk.LEFT, padx=4)
         
@@ -2476,6 +2498,73 @@ class PluginGeneratorApp(tk.Tk):
         self.library_var.set('')
         self.icon_var.set('')
         messagebox.showinfo('Clear Saved Paths', 'Persisted paths were cleared.')
+
+    def build_preset_configuration(self):
+        return {
+            'name': self.name_var.get(),
+            'description': self.description_var.get(),
+            'behavior': self.behavior_var.get(),
+            'basic_layout': self.basic_layout_var.get(),
+            'include_view': self.add_view_var.get(),
+            'atlas_parameters': self.atlas_parameter_text.get('1.0', tk.END).splitlines(),
+            'display_properties': self.display_property_specs,
+            'commands': self.command_specs,
+            'services': [name for name, var in self.service_vars.items() if var.get()],
+            'parameter_max_count': self.parameter_max_var.get(),
+            'include_status_state': self.status_state_var.get(),
+            'include_lifecycle_hooks': self.lifecycle_hooks_var.get(),
+            'include_session_notifications': self.session_notifications_var.get(),
+            'include_item_collection': self.item_collection_var.get(),
+            'collection_name': self.collection_name_var.get(),
+            'item_class_name': self.item_class_name_var.get(),
+            'item_fields': self.item_fields_var.get(),
+        }
+
+    def apply_preset_configuration(self, configuration):
+        self.name_var.set(configuration.get('name', ''))
+        self.description_var.set(configuration.get('description', ''))
+        self.behavior_var.set(configuration.get('behavior', BEHAVIOR_CURRENT_VALUE))
+        self.basic_layout_var.set(configuration.get('basic_layout', 'text'))
+        self.add_view_var.set(configuration.get('include_view', True))
+        self.atlas_parameter_text.delete('1.0', tk.END)
+        self.atlas_parameter_text.insert('1.0', '\n'.join(configuration.get('atlas_parameters', [])))
+        self.display_property_specs = list(configuration.get('display_properties', []))
+        self.command_specs = list(configuration.get('commands', []))
+        self.refresh_property_tree()
+        self.refresh_command_tree()
+        selected_services = set(configuration.get('services', []))
+        for name, var in self.service_vars.items():
+            var.set(name in selected_services)
+        self.parameter_max_var.set(str(configuration.get('parameter_max_count', '100')))
+        self.status_state_var.set(configuration.get('include_status_state', False))
+        self.lifecycle_hooks_var.set(configuration.get('include_lifecycle_hooks', False))
+        self.session_notifications_var.set(configuration.get('include_session_notifications', False))
+        self.item_collection_var.set(configuration.get('include_item_collection', False))
+        self.collection_name_var.set(configuration.get('collection_name', 'Items'))
+        self.item_class_name_var.set(configuration.get('item_class_name', 'ItemViewModel'))
+        self.item_fields_var.set(configuration.get('item_fields', 'Name:string'))
+        self.update_behavior_states()
+
+    def save_preset_dialog(self):
+        path = filedialog.asksaveasfilename(
+            title='Save PluginGenerator Preset',
+            defaultextension='.json',
+            filetypes=[('JSON preset', '*.json')],
+        )
+        if path:
+            save_preset(path, self.build_preset_configuration())
+
+    def load_preset_dialog(self):
+        path = filedialog.askopenfilename(
+            title='Load PluginGenerator Preset',
+            filetypes=[('JSON preset', '*.json')],
+        )
+        if not path:
+            return
+        try:
+            self.apply_preset_configuration(load_preset(path))
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            messagebox.showerror('Load Preset', str(error))
 
     def generate(self):
         name = self.name_var.get().strip()

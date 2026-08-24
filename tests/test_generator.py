@@ -28,6 +28,8 @@ from tools.PluginGenerator.gui import (
     build_display_property_field,
     build_display_property_spec,
     generate_plugin,
+    load_preset,
+    save_preset,
 )
 from tools.PluginGenerator.generator import run
 
@@ -38,6 +40,27 @@ ICON = ROOT / 'icon.png'
 
 
 class ParameterAndPropertyTests(unittest.TestCase):
+    def test_preset_round_trip(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'plugin.json'
+            configuration = {
+                'name': 'DemoPlugin',
+                'behavior': BEHAVIOR_BASIC,
+                'commands': [build_command_spec('Refresh')],
+            }
+
+            save_preset(path, configuration)
+
+            self.assertEqual(configuration, load_preset(path))
+
+    def test_preset_rejects_unknown_version(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'plugin.json'
+            path.write_text('{"version": 999, "configuration": {}}', encoding='utf-8')
+
+            with self.assertRaisesRegex(ValueError, 'Unsupported or invalid'):
+                load_preset(path)
+
     def test_current_value_behavior_uses_parameter_support(self):
         self.assertTrue(behavior_uses_parameters(BEHAVIOR_CURRENT_VALUE))
 
