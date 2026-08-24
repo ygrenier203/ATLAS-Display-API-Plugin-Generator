@@ -960,6 +960,13 @@ DISPLAY_PROPERTY_TYPES = {
     'Boolean': 'bool',
 }
 
+DISPLAY_PROPERTY_ACTIONS = {
+    'No automatic action': 'none',
+    'Refresh current value': 'refresh-current',
+    'Refresh visible range': 'refresh-visible',
+    'Refresh current value and visible range': 'refresh-all',
+}
+
 
 def parse_display_property_default(property_type, default_value):
     text = str(default_value or '').strip()
@@ -995,7 +1002,8 @@ def parse_display_property_default(property_type, default_value):
 
 
 def build_display_property_spec(name, display_name='', category='', description='', order='', persisted=False,
-                                browsable=True, property_type='string', default_value='', existing_names=None):
+                                browsable=True, property_type='string', default_value='', change_action='none',
+                                existing_names=None):
     name = (name or '').strip()
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
         raise ValueError(f'Display property name "{name}" must be a valid C# identifier.')
@@ -1006,6 +1014,8 @@ def build_display_property_spec(name, display_name='', category='', description=
     description = (description or '').strip()
     if property_type not in DISPLAY_PROPERTY_TYPES.values():
         raise ValueError(f'Unsupported display property type: {property_type}')
+    if change_action not in DISPLAY_PROPERTY_ACTIONS.values():
+        raise ValueError(f'Unsupported display property change action: {change_action}')
     parsed_default = parse_display_property_default(property_type, default_value)
     order_text = str(order).strip()
     if not order_text:
@@ -1024,6 +1034,7 @@ def build_display_property_spec(name, display_name='', category='', description=
         'browsable': bool(browsable),
         'type': property_type,
         'default': parsed_default,
+        'change_action': change_action,
     }
 
 
@@ -1052,14 +1063,26 @@ def display_property_default_literal(spec):
 def build_display_property(spec):
     field = '_' + to_camel_case(spec['name'])
     default_value = display_property_default_literal(spec)
-    if spec['persisted']:
+    action_statements = {
+        'none': '',
+        'refresh-current': '                    this.MakeDataRequests(true, false);\n',
+        'refresh-visible': '                    this.MakeDataRequests(false, true);\n',
+        'refresh-all': '                    this.MakeDataRequests(true, true);\n',
+    }
+    action_statement = action_statements[spec.get('change_action', 'none')]
+    if spec['persisted'] or action_statement:
+        save_statement = '                    this.SaveProperty(value);\n' if spec['persisted'] else ''
         accessor = (
             f'            get => this.{field} = this.ReadProperty({default_value});\n'
+            if spec['persisted'] else
+            f'            get => this.{field};\n'
+        ) + (
             '            set\n'
             '            {\n'
             f'                if (this.SetProperty(ref this.{field}, value))\n'
             '                {\n'
-            '                    this.SaveProperty(value);\n'
+            f'{save_statement}'
+            f'{action_statement}'
             '                }\n'
             '            }\n'
         )
@@ -1117,6 +1140,24 @@ def behavior_uses_parameters(behavior):
     if behavior == BEHAVIOR_BASIC:
         return False
     raise ValueError(f'Unknown plugin behavior: {behavior}')
+
+
+def validate_display_property_actions(display_property_specs, behavior):
+    allowed_actions = {
+        BEHAVIOR_BASIC: {'none'},
+        BEHAVIOR_CURRENT_VALUE: {'none', 'refresh-current'},
+        BEHAVIOR_VISIBLE_RANGE: {'none', 'refresh-visible'},
+        BEHAVIOR_CURRENT_AND_RANGE: set(DISPLAY_PROPERTY_ACTIONS.values()),
+        BEHAVIOR_COMPARE_SESSIONS: {'none', 'refresh-current'},
+    }[behavior]
+    for spec in display_property_specs:
+        action = spec.get('change_action', 'none')
+        if action not in allowed_actions:
+            action_label = next(label for label, value in DISPLAY_PROPERTY_ACTIONS.items() if value == action)
+            raise ValueError(
+                f'Display property "{spec["name"]}" cannot use "{action_label}" '
+                f'with the "{behavior}" behavior.'
+            )
 
 
 def build_service_entries(service_names):
@@ -1177,6 +1218,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         existing_atlas_parameters.add(validated_identifier)
     atlas_parameters = validated_atlas_parameters
     display_property_specs = list(display_property_specs or [])
+    validate_display_property_actions(display_property_specs, behavior)
     if atlas_parameters and not include_parameters:
         raise ValueError('ATLAS parameters require a data behavior.')
     if len(atlas_parameters) > parameter_max_count:
@@ -1517,13 +1559,13 @@ class PluginGeneratorApp(tk.Tk):
 
         self.display_property_specs = []
 
-        tree_columns = ('identifier', 'type', 'default', 'display_name', 'category', 'persisted', 'browsable')
+        tree_columns = ('identifier', 'type', 'default', 'action', 'display_name', 'persisted', 'browsable')
         column_headings = {
             'identifier': 'Identifier',
             'type': 'Type',
             'default': 'Default',
+            'action': 'When Changed',
             'display_name': 'Display Name',
-            'category': 'Category',
             'persisted': 'Persisted',
             'browsable': 'Browsable',
         }
@@ -1531,8 +1573,8 @@ class PluginGeneratorApp(tk.Tk):
             'identifier': 110,
             'type': 70,
             'default': 90,
+            'action': 130,
             'display_name': 120,
-            'category': 90,
             'persisted': 65,
             'browsable': 65,
         }
@@ -1626,8 +1668,11 @@ class PluginGeneratorApp(tk.Tk):
                 spec['name'],
                 next(label for label, property_type in DISPLAY_PROPERTY_TYPES.items() if property_type == spec['type']),
                 str(spec['default']),
+                next(
+                    label for label, action in DISPLAY_PROPERTY_ACTIONS.items()
+                    if action == spec.get('change_action', 'none')
+                ),
                 spec['display_name'],
-                spec['category'],
                 'Yes' if spec['persisted'] else 'No',
                 'Yes' if spec['browsable'] else 'No',
             ))
@@ -1674,6 +1719,10 @@ class PluginGeneratorApp(tk.Tk):
             label for label, property_type in DISPLAY_PROPERTY_TYPES.items() if property_type == initial_type
         ))
         default_var = tk.StringVar(value=str(initial.get('default', '')))
+        initial_action = initial.get('change_action', 'none')
+        action_var = tk.StringVar(value=next(
+            label for label, action in DISPLAY_PROPERTY_ACTIONS.items() if action == initial_action
+        ))
         display_name_var = tk.StringVar(value=initial.get('display_name', ''))
         category_var = tk.StringVar(value=initial.get('category', ''))
         description_var = tk.StringVar(value=initial.get('description', ''))
@@ -1685,6 +1734,7 @@ class PluginGeneratorApp(tk.Tk):
             ('Property Name (required):', identifier_var, 'entry'),
             ('Type:', type_var, 'type'),
             ('Default Value:', default_var, 'entry'),
+            ('When Changed:', action_var, 'action'),
             ('Display Name:', display_name_var, 'entry'),
             ('Category:', category_var, 'entry'),
             ('Description:', description_var, 'entry'),
@@ -1692,11 +1742,12 @@ class PluginGeneratorApp(tk.Tk):
         ]
         for row, (label_text, var, field_kind) in enumerate(fields):
             tk.Label(dialog, text=label_text).grid(row=row, column=0, sticky='w', padx=8, pady=6)
-            if field_kind == 'type':
+            if field_kind in ('type', 'action'):
+                choices = DISPLAY_PROPERTY_TYPES if field_kind == 'type' else DISPLAY_PROPERTY_ACTIONS
                 ttk.Combobox(
                     dialog,
                     textvariable=var,
-                    values=tuple(DISPLAY_PROPERTY_TYPES),
+                    values=tuple(choices),
                     state='readonly',
                     width=33,
                 ).grid(row=row, column=1, sticky='ew', padx=8, pady=6)
@@ -1727,6 +1778,7 @@ class PluginGeneratorApp(tk.Tk):
                     browsable_var.get(),
                     DISPLAY_PROPERTY_TYPES[type_var.get()],
                     default_var.get(),
+                    DISPLAY_PROPERTY_ACTIONS[action_var.get()],
                     existing_names=existing_names,
                 )
             except ValueError as error:

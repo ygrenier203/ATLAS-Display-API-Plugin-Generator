@@ -96,6 +96,19 @@ class ParameterAndPropertyTests(unittest.TestCase):
                         default_value=default_value,
                     )
 
+    def test_property_change_action_generates_data_refresh(self):
+        spec = build_display_property_spec(
+            'SampleLimit',
+            property_type='int',
+            default_value='100',
+            persisted=True,
+            change_action='refresh-all',
+        )
+        source = build_display_property(spec)
+
+        self.assertIn('this.SaveProperty(value);', source)
+        self.assertIn('this.MakeDataRequests(true, true);', source)
+
 
 class GenerationTests(unittest.TestCase):
     def generate(self, **options):
@@ -207,6 +220,34 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('CompositeSessionKey SessionKey', value)
         self.assertIn('ItemsSource="{Binding Rows}"', view)
         self.assertIn('ItemsSource="{Binding SessionValues}"', view)
+
+    def test_property_refresh_action_must_match_behavior(self):
+        spec = build_display_property_spec(
+            'RefreshSetting',
+            change_action='refresh-visible',
+        )
+        with self.assertRaisesRegex(ValueError, 'cannot use'):
+            self.generate(
+                behavior=BEHAVIOR_CURRENT_VALUE,
+                library_project=str(LIBRARY_PROJECT),
+                display_property_specs=[spec],
+            )
+
+    def test_combined_behavior_accepts_refresh_all_action(self):
+        spec = build_display_property_spec(
+            'RefreshSetting',
+            change_action='refresh-all',
+        )
+        target = self.generate(
+            behavior=BEHAVIOR_CURRENT_AND_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            display_property_specs=[spec],
+        )
+        viewmodel = (
+            target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('this.MakeDataRequests(true, true);', viewmodel)
 
 
 if __name__ == '__main__':
