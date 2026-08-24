@@ -431,7 +431,7 @@ def build_parameter_property(spec):
     attribute_block = ''.join(f'{attribute}\n' for attribute in attributes)
     return (
         f'{attribute_block}'
-        f'        public string {spec["name"]}\n'
+        f'        public string {spec["name"].capitalize()}\n'
         '        {\n'
         f'{accessor}'
         '        }\n'
@@ -562,7 +562,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     custom_parameter_properties = ''
     if include_parameters and parameter_specs:
         registrations = '\n'.join(
-                f'            this.DisplayParameterService.AddParameterContainer("{escape_csharp_string(spec["name"])}");'
+                f'            DisplayParameterService.AddParameterContainer("{escape_csharp_string(spec["name"].capitalize())}");'
             for spec in parameter_specs
         )
         parameter_setup = (
