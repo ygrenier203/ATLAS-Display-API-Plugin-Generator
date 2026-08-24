@@ -27,7 +27,67 @@ CS_PROJ_TEMPLATE = r'''<Project Sdk="Microsoft.NET.Sdk">
     <PackageReference Include="MAT.OCS.Core" Version="*" />
     <PackageReference Include="System.Reactive" Version="4.4.1" />
   </ItemGroup>
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+    <Exec Command="python &quot;$(SolutionDir)scripts\deploy.py&quot; &quot;$(TargetDir)$(ProjectName).dll&quot;" />
+  </Target>
 </Project>
+'''
+
+DEPLOY_PY_TEMPLATE = r'''import argparse
+import ctypes
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+
+
+DESTINATION = Path(r'{atlas_install_path}')
+
+
+def is_elevated():
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except AttributeError:
+        return False
+
+
+def relaunch_elevated(dll_path):
+    parameters = subprocess.list2cmdline([__file__, str(dll_path)])
+    result = ctypes.windll.shell32.ShellExecuteW(
+        None,
+        'runas',
+        sys.executable,
+        parameters,
+        None,
+        1,
+    )
+    if result <= 32:
+        raise RuntimeError('Administrator permission was not granted.')
+    return 0
+
+
+def deploy(dll_path):
+    dll_path = Path(dll_path).resolve()
+    if not dll_path.is_file():
+        raise FileNotFoundError(f'Build output not found: {{dll_path}}')
+    if not is_elevated():
+        return relaunch_elevated(dll_path)
+    DESTINATION.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(dll_path, DESTINATION / dll_path.name)
+    print(f'Deployed {{dll_path.name}} to {{DESTINATION}}')
+    return 0
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Deploy a built ATLAS display plugin.')
+    parser.add_argument('dll_path')
+    arguments = parser.parse_args()
+    try:
+        sys.exit(deploy(arguments.dll_path))
+    except (FileNotFoundError, RuntimeError, OSError) as error:
+        print(f'Deployment failed: {{error}}', file=sys.stderr)
+        sys.exit(1)
 '''
 
 PLUGIN_MODULE_TEMPLATE = '''using System.ComponentModel.Composition;
@@ -395,6 +455,14 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     sln_path = os.path.join(target, f'{name}.sln')
     with open(sln_path, 'w', encoding='utf-8', newline='') as stream:
         stream.write(sln_content)
+
+    scripts_dir = os.path.join(target, 'scripts')
+    os.makedirs(scripts_dir, exist_ok=True)
+    deploy_py = DEPLOY_PY_TEMPLATE.format(
+        atlas_install_path=r'C:\Program Files\McLaren Applied Technologies\ATLAS 10',
+    )
+    with open(os.path.join(scripts_dir, 'deploy.py'), 'w', encoding='utf-8', newline='') as stream:
+        stream.write(deploy_py)
     
     return target
 
