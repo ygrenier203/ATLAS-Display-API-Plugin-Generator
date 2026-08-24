@@ -11,7 +11,7 @@ def run(args=None):
 	parser.add_argument('--no-view', action='store_true', help='omit the WPF view files')
 	parser.add_argument(
 		'--behavior',
-		choices=('current-value', 'visible-range', 'basic'),
+		choices=('current-value', 'visible-range', 'current-and-range', 'basic'),
 		default='current-value',
 		help='plugin behavior: cursor values, visible time-range data, or a basic display',
 	)
@@ -28,6 +28,7 @@ def run(args=None):
 
 	from .gui import (
 		BEHAVIOR_BASIC,
+		BEHAVIOR_CURRENT_AND_RANGE,
 		BEHAVIOR_CURRENT_VALUE,
 		BEHAVIOR_VISIBLE_RANGE,
 		clear_settings,
@@ -52,6 +53,7 @@ def run(args=None):
 	behavior_map = {
 		'current-value': BEHAVIOR_CURRENT_VALUE,
 		'visible-range': BEHAVIOR_VISIBLE_RANGE,
+		'current-and-range': BEHAVIOR_CURRENT_AND_RANGE,
 		'basic': BEHAVIOR_BASIC,
 	}
 	behavior = BEHAVIOR_BASIC if options.no_parameters else behavior_map[options.behavior]
@@ -64,7 +66,7 @@ def run(args=None):
 	if include_parameters and not library_project:
 		parser.error('--library-project is required for current-value plugins on first use.')
 	if not include_parameters and options.atlas_parameter:
-		parser.error('--atlas-parameter requires --behavior current-value or visible-range.')
+		parser.error('--atlas-parameter requires a data behavior.')
 	if not icon_path:
 		parser.error('--icon is required on first use. Choose the PNG icon for the plugin.')
 	target = generate_plugin(

@@ -203,6 +203,7 @@ namespace {namespace}
             this.Disposables.Add(this.SignalBus.Subscribe<DataResultSignal>(
                 this.HandleDataResultSignal,
                 signal => signal.SourceId == this.ScopeIdentity.Guid));
+{cursor_subscription}
 {extra_ctor_assignments}        }}
 
         [Category("Data")]
@@ -244,6 +245,9 @@ namespace {namespace}
                 this.SignalBus.Send(signal);
             }}
         }}
+
+{cursor_request_method}
+{cursor_result_handler}
 
         private async void HandleDataResultSignal(DataResultSignal signal)
         {{
@@ -312,6 +316,7 @@ namespace {namespace}
     {{
         private double maximum = double.NaN;
         private double minimum = double.NaN;
+{current_value_field}
         private string name;
         private int sampleCount;
         private IReadOnlyList<long> timestamps = Array.Empty<long>();
@@ -350,6 +355,8 @@ namespace {namespace}
             private set => this.SetProperty(ref this.maximum, value);
         }}
 
+{current_value_property}
+
         [Browsable(false)]
         public IReadOnlyList<long> Timestamps
         {{
@@ -373,9 +380,89 @@ namespace {namespace}
             this.Minimum = validValues.Length == 0 ? double.NaN : validValues.Min();
             this.Maximum = validValues.Length == 0 ? double.NaN : validValues.Max();
         }}
+
+{current_value_update_method}
     }}
 }}
 '''
+
+CURSOR_SUBSCRIPTION = '''            this.Disposables.Add(this.SignalBus.Subscribe<SampleResultSignal>(
+                this.HandleSampleResultSignal,
+                signal => signal.SourceId == this.ScopeIdentity.Guid));'''
+
+CURSOR_REQUEST_METHOD = '''        protected override Task OnMakeCursorDataRequestsAsync(ICompositeSession compositeSession)
+        {
+            foreach (var parameter in this.DisplayParameterService.PrimaryParameters)
+            {
+                var signal = this.DataRequestSignalFactory.CreateSampleRequestSignal(
+                    this.ScopeIdentity.Guid,
+                    parameter.InstanceIdentifier,
+                    compositeSession.Key,
+                    parameter,
+                    compositeSession.CursorPoint + 1,
+                    1,
+                    SampleDirection.Previous);
+
+                this.SignalBus.Send(signal);
+            }
+
+            return Task.CompletedTask;
+        }'''
+
+CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(SampleResultSignal signal)
+        {
+            try
+            {
+                var parameterValues = signal.Data.ParameterValues;
+                double value;
+                parameterValues.Lock();
+                try
+                {
+                    if (parameterValues.SampleCount == 0)
+                    {
+                        return;
+                    }
+
+                    value = parameterValues.Data[0];
+                }
+                finally
+                {
+                    parameterValues.Unlock();
+                }
+
+                if (double.IsNaN(value))
+                {
+                    return;
+                }
+
+                await this.ExecuteOnUiAsync(() =>
+                {
+                    var series = this.Series.FirstOrDefault(item =>
+                        item.ParameterIdentifier == signal.Data.Request.RequestId);
+                    series?.UpdateCurrentValue(value);
+                });
+            }
+            catch (Exception exception)
+            {
+                this.Logger.Trace("Error handling cursor data", exception);
+            }
+        }'''
+
+CURRENT_VALUE_FIELD = '        private double currentValue = double.NaN;'
+
+CURRENT_VALUE_PROPERTY = '''        public double CurrentValue
+        {
+            get => this.currentValue;
+            private set => this.SetProperty(ref this.currentValue, value);
+        }'''
+
+CURRENT_VALUE_UPDATE_METHOD = '''        public void UpdateCurrentValue(double value)
+        {
+            this.CurrentValue = value;
+        }'''
+
+CURRENT_VALUE_TEXT = '''                            <TextBlock Text="{Binding CurrentValue, StringFormat='Current: {0:F3}'}"
+                                       FontSize="20" Foreground="White" />'''
 
 PARAMETER_VIEWMODEL_TEMPLATE = '''using DisplayPluginLibrary;
 
@@ -489,9 +576,10 @@ TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                     <Border BorderBrush="DarkGray" BorderThickness="1" Padding="12" Margin="4">
                         <StackPanel>
                             <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
-                            <TextBlock Text="{{Binding SampleCount, StringFormat=Samples: {{0}}}}" Foreground="White" />
-                            <TextBlock Text="{{Binding Minimum, StringFormat=Minimum: {{0:F3}}}}" Foreground="White" />
-                            <TextBlock Text="{{Binding Maximum, StringFormat=Maximum: {{0:F3}}}}" Foreground="White" />
+{current_value_text}
+                            <TextBlock Text="{{Binding SampleCount, StringFormat='Samples: {{0}}'}}" Foreground="White" />
+                            <TextBlock Text="{{Binding Minimum, StringFormat='Minimum: {{0:F3}}'}}" Foreground="White" />
+                            <TextBlock Text="{{Binding Maximum, StringFormat='Maximum: {{0:F3}}'}}" Foreground="White" />
                         </StackPanel>
                     </Border>
                 </DataTemplate>
@@ -691,11 +779,12 @@ SERVICE_DEFINITIONS = {
 
 BEHAVIOR_CURRENT_VALUE = 'Current value at cursor'
 BEHAVIOR_VISIBLE_RANGE = 'Visible range data'
+BEHAVIOR_CURRENT_AND_RANGE = 'Current value + visible range'
 BEHAVIOR_BASIC = 'Basic display'
 
 
 def behavior_uses_parameters(behavior):
-    if behavior in (BEHAVIOR_CURRENT_VALUE, BEHAVIOR_VISIBLE_RANGE):
+    if behavior in (BEHAVIOR_CURRENT_VALUE, BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         return True
     if behavior == BEHAVIOR_BASIC:
         return False
@@ -824,7 +913,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     if behavior == BEHAVIOR_CURRENT_VALUE:
         viewmodel_template = VIEWMODEL_TEMPLATE
         view_template = VIEW_XAML_TEMPLATE
-    elif behavior == BEHAVIOR_VISIBLE_RANGE:
+    elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         viewmodel_template = TIMEBASE_VIEWMODEL_TEMPLATE
         view_template = TIMEBASE_VIEW_XAML_TEMPLATE
     else:
@@ -897,16 +986,26 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             extra_ctor_assignments=extra_ctor_assignments,
             service_members=service_members,
             parameter_max_count=parameter_max_count,
+            cursor_subscription=CURSOR_SUBSCRIPTION if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
+            cursor_request_method=CURSOR_REQUEST_METHOD if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
+            cursor_result_handler=CURSOR_RESULT_HANDLER if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
         ),
     }
     if behavior == BEHAVIOR_CURRENT_VALUE:
         files['ParameterViewModel.cs'] = PARAMETER_VIEWMODEL_TEMPLATE.format(namespace=namespace)
-    elif behavior == BEHAVIOR_VISIBLE_RANGE:
-        files['TimebaseSeriesViewModel.cs'] = TIMEBASE_SERIES_VIEWMODEL_TEMPLATE.format(namespace=namespace)
+    elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
+        include_current_value = behavior == BEHAVIOR_CURRENT_AND_RANGE
+        files['TimebaseSeriesViewModel.cs'] = TIMEBASE_SERIES_VIEWMODEL_TEMPLATE.format(
+            namespace=namespace,
+            current_value_field=CURRENT_VALUE_FIELD if include_current_value else '',
+            current_value_property=CURRENT_VALUE_PROPERTY if include_current_value else '',
+            current_value_update_method=CURRENT_VALUE_UPDATE_METHOD if include_current_value else '',
+        )
     if include_view:
         files[f'{name}View.xaml'] = view_template.format(
             namespace=namespace,
             view_class=f'{name}View',
+            current_value_text=(CURRENT_VALUE_TEXT if behavior == BEHAVIOR_CURRENT_AND_RANGE else ''),
         )
         files[f'{name}View.xaml.cs'] = VIEW_CODEBEHIND_TEMPLATE.format(
             namespace=namespace,
@@ -1021,14 +1120,19 @@ class PluginGeneratorApp(tk.Tk):
         behavior_combo = ttk.Combobox(
             config_frame,
             textvariable=self.behavior_var,
-            values=(BEHAVIOR_CURRENT_VALUE, BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_BASIC),
+            values=(
+                BEHAVIOR_CURRENT_VALUE,
+                BEHAVIOR_VISIBLE_RANGE,
+                BEHAVIOR_CURRENT_AND_RANGE,
+                BEHAVIOR_BASIC,
+            ),
             state='readonly',
         )
         behavior_combo.pack(fill=tk.X, pady=(0, 4))
         behavior_combo.bind('<<ComboboxSelected>>', lambda event: self.update_behavior_states())
         tk.Label(
             config_frame,
-            text='Current value follows the cursor. Visible range retrieves samples across the displayed time range.',
+            text='Choose cursor values, visible-range samples, both data sources, or a basic display.',
             font=('Arial', 8, 'italic'), justify='left', wraplength=600,
         ).pack(anchor='w', pady=(0, 4))
         
