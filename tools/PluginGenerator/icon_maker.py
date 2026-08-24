@@ -128,3 +128,126 @@ def create_icon_png(path, size=256, background='#20242B', foreground='#27B5E8', 
     with open(path, 'wb') as stream:
         stream.write(png)
     return path
+
+
+def open_icon_maker(parent, initial_directory=''):
+    import tkinter as tk
+    from tkinter import colorchooser, filedialog, messagebox, ttk
+
+    dialog = tk.Toplevel(parent)
+    dialog.title('ATLAS Plugin Icon Maker')
+    dialog.transient(parent)
+    dialog.grab_set()
+    dialog.resizable(False, False)
+
+    background_var = tk.StringVar(value='#20242B')
+    foreground_var = tk.StringVar(value='#27B5E8')
+    symbol_var = tk.StringVar(value='graph')
+    size_var = tk.StringVar(value='256')
+    result = {}
+
+    canvas = tk.Canvas(dialog, width=192, height=192, highlightthickness=1, highlightbackground='#777777')
+    canvas.grid(row=0, column=0, rowspan=7, padx=12, pady=12)
+
+    def redraw(*_args):
+        canvas.delete('all')
+        background = background_var.get()
+        foreground = foreground_var.get()
+        try:
+            canvas.configure(background=background)
+        except tk.TclError:
+            return
+        margin = 34
+        middle = 96
+        width = 7
+        symbol = symbol_var.get()
+        if symbol == 'graph':
+            points = (margin, 150, 76, 112, 116, 128, 158, margin)
+            canvas.create_line(*points, fill=foreground, width=width, joint='curve')
+            for index in range(0, len(points), 2):
+                canvas.create_oval(points[index] - 5, points[index + 1] - 5,
+                                   points[index] + 5, points[index + 1] + 5,
+                                   fill=foreground, outline='')
+        elif symbol == 'pulse':
+            canvas.create_line(margin, middle, 72, middle, 86, margin, 108, 158,
+                               122, middle, 158, middle, fill=foreground, width=width)
+        elif symbol == 'gauge':
+            canvas.create_oval(margin, margin, 158, 158, outline=foreground, width=width)
+            canvas.create_line(middle, middle, 140, 65, fill=foreground, width=width)
+            canvas.create_oval(88, 88, 104, 104, fill=foreground, outline='')
+        else:
+            for left, top, right, bottom in ((40, 40, 88, 88), (104, 40, 152, 88),
+                                              (40, 104, 88, 152), (104, 104, 152, 152)):
+                canvas.create_rectangle(left, top, right, bottom, fill=foreground, outline='')
+
+    def choose_color(variable):
+        color = colorchooser.askcolor(variable.get(), parent=dialog)[1]
+        if color:
+            variable.set(color.upper())
+            redraw()
+
+    tk.Label(dialog, text='Symbol:').grid(row=0, column=1, sticky='w', padx=8, pady=(14, 4))
+    symbol_combo = ttk.Combobox(dialog, textvariable=symbol_var, values=ICON_SYMBOLS, state='readonly', width=18)
+    symbol_combo.grid(row=0, column=2, sticky='ew', padx=8, pady=(14, 4))
+    symbol_combo.bind('<<ComboboxSelected>>', redraw)
+
+    tk.Label(dialog, text='Background:').grid(row=1, column=1, sticky='w', padx=8, pady=4)
+    tk.Entry(dialog, textvariable=background_var, width=14).grid(row=1, column=2, sticky='w', padx=8)
+    tk.Button(dialog, text='Choose...', command=lambda: choose_color(background_var)).grid(row=1, column=3, padx=8)
+
+    tk.Label(dialog, text='Accent:').grid(row=2, column=1, sticky='w', padx=8, pady=4)
+    tk.Entry(dialog, textvariable=foreground_var, width=14).grid(row=2, column=2, sticky='w', padx=8)
+    tk.Button(dialog, text='Choose...', command=lambda: choose_color(foreground_var)).grid(row=2, column=3, padx=8)
+
+    tk.Label(dialog, text='PNG size:').grid(row=3, column=1, sticky='w', padx=8, pady=4)
+    ttk.Combobox(dialog, textvariable=size_var, values=('64', '128', '256', '512'), state='readonly', width=10).grid(
+        row=3, column=2, sticky='w', padx=8
+    )
+
+    def save_and_use():
+        try:
+            parse_hex_color(background_var.get())
+            parse_hex_color(foreground_var.get())
+        except ValueError as error:
+            messagebox.showerror('Invalid Color', str(error), parent=dialog)
+            return
+        path = filedialog.asksaveasfilename(
+            parent=dialog,
+            title='Save Plugin Icon',
+            initialdir=initial_directory or None,
+            initialfile='icon.png',
+            defaultextension='.png',
+            filetypes=[('PNG image', '*.png')],
+        )
+        if not path:
+            return
+        create_icon_png(path, int(size_var.get()), background_var.get(), foreground_var.get(), symbol_var.get())
+        result['path'] = path
+        dialog.destroy()
+
+    buttons = tk.Frame(dialog)
+    buttons.grid(row=5, column=1, columnspan=3, pady=14)
+    tk.Button(buttons, text='Save and Use', command=save_and_use, width=14).pack(side=tk.LEFT, padx=4)
+    tk.Button(buttons, text='Cancel', command=dialog.destroy, width=10).pack(side=tk.LEFT, padx=4)
+    background_var.trace_add('write', lambda *_args: redraw())
+    foreground_var.trace_add('write', lambda *_args: redraw())
+    redraw()
+    dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)
+    dialog.wait_window()
+    return result.get('path')
+
+
+def main():
+    import os
+    import tkinter as tk
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        open_icon_maker(root, os.getcwd())
+    finally:
+        root.destroy()
+
+
+if __name__ == '__main__':
+    main()

@@ -2000,6 +2000,7 @@ class PluginGeneratorApp(tk.Tk):
         self.icon_var = tk.StringVar(value=settings.get('icon_path', ''))
         tk.Entry(output_frame, textvariable=self.icon_var, width=45).grid(row=2, column=1, sticky='ew', padx=8)
         tk.Button(output_frame, text='Browse', command=self.browse_icon).grid(row=2, column=2, padx=6)
+        tk.Button(output_frame, text='Create...', command=self.create_icon).grid(row=2, column=3, padx=6)
         
         # === Plugin Behavior ===
         config_frame = tk.LabelFrame(scrollable_frame, text='Plugin Behavior', padx=8, pady=8)
@@ -2264,6 +2265,20 @@ class PluginGeneratorApp(tk.Tk):
             initialdir=initial_dir,
             filetypes=[('PNG image', '*.png')],
         )
+        if path:
+            self.icon_var.set(path)
+
+    def create_icon(self):
+        from .icon_maker import open_icon_maker
+
+        initial = self.icon_var.get().strip()
+        if os.path.isfile(initial):
+            initial_directory = os.path.dirname(initial)
+        elif self.out_var.get().strip() and os.path.isdir(self.out_var.get().strip()):
+            initial_directory = self.out_var.get().strip()
+        else:
+            initial_directory = os.getcwd()
+        path = open_icon_maker(self, initial_directory)
         if path:
             self.icon_var.set(path)
 
