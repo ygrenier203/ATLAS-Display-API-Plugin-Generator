@@ -462,6 +462,17 @@ SERVICE_DEFINITIONS = {
     'ISessionCursorService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionCursorService'},
 }
 
+BEHAVIOR_CURRENT_VALUE = 'Current value at cursor'
+BEHAVIOR_BASIC = 'Basic display'
+
+
+def behavior_uses_parameters(behavior):
+    if behavior == BEHAVIOR_CURRENT_VALUE:
+        return True
+    if behavior == BEHAVIOR_BASIC:
+        return False
+    raise ValueError(f'Unknown plugin behavior: {behavior}')
+
 
 def build_service_entries(service_names):
     return [
@@ -520,7 +531,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     atlas_parameters = validated_atlas_parameters
     display_property_specs = list(display_property_specs or [])
     if atlas_parameters and not include_parameters:
-        raise ValueError('Enable dynamic parameter support to add ATLAS parameters.')
+        raise ValueError('ATLAS parameters require the Current value at cursor behavior.')
     if len(atlas_parameters) > parameter_max_count:
         raise ValueError('Maximum parameter count cannot be lower than the number of ATLAS parameters.')
     namespace = name
@@ -762,16 +773,28 @@ class PluginGeneratorApp(tk.Tk):
         tk.Entry(output_frame, textvariable=self.icon_var, width=45).grid(row=2, column=1, sticky='ew', padx=8)
         tk.Button(output_frame, text='Browse', command=self.browse_icon).grid(row=2, column=2, padx=6)
         
-        # === View & Parameter Configuration ===
-        config_frame = tk.LabelFrame(scrollable_frame, text='View & Parameter Configuration', padx=8, pady=8)
+        # === Plugin Behavior ===
+        config_frame = tk.LabelFrame(scrollable_frame, text='Plugin Behavior', padx=8, pady=8)
         config_frame.pack(fill=tk.X, pady=8)
+
+        tk.Label(config_frame, text='What should the plugin do?').pack(anchor='w', pady=(0, 4))
+        self.behavior_var = tk.StringVar(value=BEHAVIOR_CURRENT_VALUE)
+        behavior_combo = ttk.Combobox(
+            config_frame,
+            textvariable=self.behavior_var,
+            values=(BEHAVIOR_CURRENT_VALUE, BEHAVIOR_BASIC),
+            state='readonly',
+        )
+        behavior_combo.pack(fill=tk.X, pady=(0, 4))
+        behavior_combo.bind('<<ComboboxSelected>>', lambda event: self.update_behavior_states())
+        tk.Label(
+            config_frame,
+            text='Current value follows the ATLAS cursor. Basic display adds no automatic data retrieval.',
+            font=('Arial', 8, 'italic'), justify='left', wraplength=600,
+        ).pack(anchor='w', pady=(0, 4))
         
         self.add_view_var = tk.BooleanVar(value=True)
         tk.Checkbutton(config_frame, text='Include simple WPF View', variable=self.add_view_var).pack(anchor='w', pady=4)
-        
-        self.add_parameters_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(config_frame, text='Include dynamic parameter support (uses ParameterSampleDisplayViewModelBase)', 
-                       variable=self.add_parameters_var, command=self.update_service_checkbox_states).pack(anchor='w', pady=4)
 
         # === Injected Services ===
         services_frame = tk.LabelFrame(scrollable_frame, text='Injected Services', padx=8, pady=8)
@@ -779,7 +802,7 @@ class PluginGeneratorApp(tk.Tk):
 
         tk.Label(
             services_frame,
-            text='ISignalBus and IDataRequestSignalFactory are always injected when dynamic parameter support is enabled.',
+            text='ISignalBus and IDataRequestSignalFactory are always injected for Current value at cursor plugins.',
             font=('Arial', 8, 'italic'), justify='left', wraplength=600,
         ).pack(anchor='w', pady=(0, 4))
 
@@ -789,7 +812,7 @@ class PluginGeneratorApp(tk.Tk):
             checkbutton = tk.Checkbutton(services_frame, text=service_name, variable=self.service_vars[service_name])
             checkbutton.pack(anchor='w')
             self.service_checkbuttons[service_name] = checkbutton
-        self.update_service_checkbox_states()
+        self.update_behavior_states()
         
         # === ATLAS Parameters ===
         atlas_frame = tk.LabelFrame(scrollable_frame, text='ATLAS Parameters', padx=8, pady=8)
@@ -801,6 +824,7 @@ class PluginGeneratorApp(tk.Tk):
         ).pack(anchor='w', pady=(0, 4))
         self.atlas_parameter_text = tk.Text(atlas_frame, height=4, wrap=tk.WORD)
         self.atlas_parameter_text.pack(fill=tk.X)
+        self.update_behavior_states()
 
         # === Display Properties ===
         property_frame = tk.LabelFrame(scrollable_frame, text='Display Properties', padx=8, pady=8)
@@ -1021,16 +1045,16 @@ class PluginGeneratorApp(tk.Tk):
         self.icon_var.set('')
         self.parameter_max_var.set('100')
         self.add_view_var.set(True)
-        self.add_parameters_var.set(True)
+        self.behavior_var.set(BEHAVIOR_CURRENT_VALUE)
         for service_var in self.service_vars.values():
             service_var.set(False)
-        self.update_service_checkbox_states()
+        self.update_behavior_states()
         self.open_folder_var.set(True)
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
-    def update_service_checkbox_states(self):
-        # ISignalBus/IDataRequestSignalFactory are always injected by the parameter base class.
-        parameters_enabled = self.add_parameters_var.get()
+    def update_behavior_states(self):
+        # Current-value behavior injects these services through the parameter base class.
+        parameters_enabled = behavior_uses_parameters(self.behavior_var.get())
         for service_name in ('ISignalBus', 'IDataRequestSignalFactory'):
             checkbutton = self.service_checkbuttons[service_name]
             if parameters_enabled:
@@ -1038,6 +1062,8 @@ class PluginGeneratorApp(tk.Tk):
                 checkbutton.config(state=tk.DISABLED)
             else:
                 checkbutton.config(state=tk.NORMAL)
+        if hasattr(self, 'atlas_parameter_text'):
+            self.atlas_parameter_text.config(state=tk.NORMAL if parameters_enabled else tk.DISABLED)
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output and library paths?'):
@@ -1058,10 +1084,11 @@ class PluginGeneratorApp(tk.Tk):
         library_project = self.library_var.get().strip()
         icon_path = self.icon_var.get().strip()
         try:
+            include_parameters = behavior_uses_parameters(self.behavior_var.get())
             if not base_out:
                 raise ValueError('Select an output folder before generating.')
-            if self.add_parameters_var.get() and not library_project:
-                raise ValueError('Select DisplayPluginLibrary.csproj before generating a parameter plugin.')
+            if include_parameters and not library_project:
+                raise ValueError('Select DisplayPluginLibrary.csproj before generating a current-value plugin.')
             if not icon_path:
                 raise ValueError('Select a PNG icon before generating the plugin.')
             atlas_parameters = []
@@ -1073,15 +1100,15 @@ class PluginGeneratorApp(tk.Tk):
                     existing_atlas_parameters.add(identifier)
             display_property_specs = list(self.display_property_specs)
             parameter_max_count = int(self.parameter_max_var.get())
-            if atlas_parameters and not self.add_parameters_var.get():
-                raise ValueError('Enable dynamic parameter support to add ATLAS parameters.')
+            if atlas_parameters and not include_parameters:
+                raise ValueError('ATLAS parameters require the Current value at cursor behavior.')
             service_names = [name for name, var in self.service_vars.items() if var.get()]
             os.makedirs(base_out, exist_ok=True)
             target = generate_plugin(
                 name,
                 base_out,
                 include_view=self.add_view_var.get(),
-                include_parameters=self.add_parameters_var.get(),
+                include_parameters=include_parameters,
                 atlas_parameters=atlas_parameters,
                 display_property_specs=display_property_specs,
                 parameter_max_count=parameter_max_count,

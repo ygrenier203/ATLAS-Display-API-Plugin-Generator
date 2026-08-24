@@ -3,6 +3,9 @@ import unittest
 from pathlib import Path
 
 from tools.PluginGenerator.gui import (
+    BEHAVIOR_BASIC,
+    BEHAVIOR_CURRENT_VALUE,
+    behavior_uses_parameters,
     build_atlas_parameter,
     build_display_property,
     build_display_property_spec,
@@ -16,6 +19,12 @@ ICON = ROOT / 'icon.png'
 
 
 class ParameterAndPropertyTests(unittest.TestCase):
+    def test_current_value_behavior_uses_parameter_support(self):
+        self.assertTrue(behavior_uses_parameters(BEHAVIOR_CURRENT_VALUE))
+
+    def test_basic_behavior_does_not_use_parameter_support(self):
+        self.assertFalse(behavior_uses_parameters(BEHAVIOR_BASIC))
+
     def test_atlas_identifier_accepts_colons(self):
         self.assertEqual('vCar:Chassis', build_atlas_parameter(' vCar:Chassis '))
 
@@ -75,7 +84,7 @@ class GenerationTests(unittest.TestCase):
         self.assertNotIn('AddParameterContainer', viewmodel)
 
     def test_atlas_parameters_require_dynamic_support(self):
-        with self.assertRaisesRegex(ValueError, 'dynamic parameter support'):
+        with self.assertRaisesRegex(ValueError, 'Current value at cursor'):
             self.generate(
                 include_parameters=False,
                 atlas_parameters=['vCar:Chassis'],
