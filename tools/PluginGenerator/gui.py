@@ -171,6 +171,212 @@ namespace {namespace}
 }}
 '''
 
+TIMEBASE_VIEWMODEL_TEMPLATE = '''using System;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Threading.Tasks;
+
+using DisplayPluginLibrary;
+
+using MAT.Atlas.Api.Core.Diagnostics;
+using MAT.Atlas.Api.Core.Signals;
+using MAT.Atlas.Client.Platform.Data;
+using MAT.Atlas.Client.Platform.Data.Signals;
+using MAT.Atlas.Client.Platform.Sessions;
+using MAT.Atlas.Client.Presentation.Plugins;
+{extra_usings}
+namespace {namespace}
+{{
+    [DisplayPluginSettings(ParametersMaxCount = {parameter_max_count})]
+    public sealed class {viewmodel_class} : TemplateDisplayViewModelBase
+    {{
+        private int dataRequestSampleCount;
+{display_property_fields}
+        public {viewmodel_class}(
+            ISignalBus signalBus,
+            IDataRequestSignalFactory dataRequestSignalFactory,
+            ILogger logger{extra_ctor_params}) :
+            base(signalBus, dataRequestSignalFactory, logger)
+        {{
+            this.Disposables.Add(this.SignalBus.Subscribe<DataResultSignal>(
+                this.HandleDataResultSignal,
+                signal => signal.SourceId == this.ScopeIdentity.Guid));
+{extra_ctor_assignments}        }}
+
+        [Category("Data")]
+        [DisplayName("Sample Count")]
+        [Description("Maximum number of samples requested across the visible time range.")]
+        [Display(Order = 0)]
+        public int DataRequestSampleCount
+        {{
+            get => this.dataRequestSampleCount = this.ReadProperty(1000);
+            set
+            {{
+                if (this.SetProperty(ref this.dataRequestSampleCount, value))
+                {{
+                    this.SaveProperty(value);
+                    this.MakeDataRequests(false, true);
+                }}
+            }}
+        }}
+
+        [Browsable(false)]
+        public ObservableCollection<TimebaseSeriesViewModel> Series {{ get; }} =
+            new ObservableCollection<TimebaseSeriesViewModel>();
+
+{display_properties}
+    {atlas_parameter_setup}
+        protected override async Task OnMakeTimebaseDataRequestsAsync(ICompositeSession compositeSession)
+        {{
+            await this.ExecuteOnUiAsync(this.SyncSeries);
+
+            foreach (var parameter in this.DisplayParameterService.PrimaryParameters)
+            {{
+                var signal = this.DataRequestSignalFactory.CreateDataRequestSignal(
+                    this.ScopeIdentity.Guid,
+                    parameter,
+                    compositeSession.TimebaseRange,
+                    this.DataRequestSampleCount,
+                    SampleMode.MaximumToMinimum);
+
+                this.SignalBus.Send(signal);
+            }}
+        }}
+
+        private async void HandleDataResultSignal(DataResultSignal signal)
+        {{
+            try
+            {{
+                var parameterValues = signal.Data.ParameterValues;
+                long[] timestamps;
+                double[] values;
+                parameterValues.Lock();
+                try
+                {{
+                    timestamps = parameterValues.Timestamp.ToArray();
+                    values = parameterValues.Data.ToArray();
+                }}
+                finally
+                {{
+                    parameterValues.Unlock();
+                }}
+
+                await this.ExecuteOnUiAsync(() =>
+                {{
+                    var series = this.Series.FirstOrDefault(item =>
+                        item.ParameterIdentifier == signal.Data.Request.Parameter.InstanceIdentifier);
+                    series?.Update(timestamps, values);
+                }});
+            }}
+            catch (Exception exception)
+            {{
+                this.Logger.Trace("Error handling visible-range data", exception);
+            }}
+        }}
+
+        private void SyncSeries()
+        {{
+            var existing = this.Series.ToDictionary(item => item.ParameterIdentifier);
+            this.Series.Clear();
+            foreach (var parameter in this.DisplayParameterService.PrimaryParameters)
+            {{
+                if (existing.TryGetValue(parameter.InstanceIdentifier, out var series))
+                {{
+                    series.Name = parameter.Name;
+                    this.Series.Add(series);
+                }}
+                else
+                {{
+                    this.Series.Add(new TimebaseSeriesViewModel(
+                        parameter.InstanceIdentifier,
+                        parameter.Name));
+                }}
+            }}
+        }}
+    }}
+}}
+'''
+
+TIMEBASE_SERIES_VIEWMODEL_TEMPLATE = '''using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.Linq;
+
+using MAT.Atlas.Api.Core.Presentation;
+
+namespace {namespace}
+{{
+    public sealed class TimebaseSeriesViewModel : BindableBase
+    {{
+        private double maximum = double.NaN;
+        private double minimum = double.NaN;
+        private string name;
+        private int sampleCount;
+        private IReadOnlyList<long> timestamps = Array.Empty<long>();
+        private IReadOnlyList<double> values = Array.Empty<double>();
+
+        public TimebaseSeriesViewModel(Guid parameterIdentifier, string name)
+        {{
+            this.ParameterIdentifier = parameterIdentifier;
+            this.name = name;
+        }}
+
+        [Browsable(false)]
+        public Guid ParameterIdentifier {{ get; }}
+
+        public string Name
+        {{
+            get => this.name;
+            set => this.SetProperty(ref this.name, value);
+        }}
+
+        public int SampleCount
+        {{
+            get => this.sampleCount;
+            private set => this.SetProperty(ref this.sampleCount, value);
+        }}
+
+        public double Minimum
+        {{
+            get => this.minimum;
+            private set => this.SetProperty(ref this.minimum, value);
+        }}
+
+        public double Maximum
+        {{
+            get => this.maximum;
+            private set => this.SetProperty(ref this.maximum, value);
+        }}
+
+        [Browsable(false)]
+        public IReadOnlyList<long> Timestamps
+        {{
+            get => this.timestamps;
+            private set => this.SetProperty(ref this.timestamps, value);
+        }}
+
+        [Browsable(false)]
+        public IReadOnlyList<double> Values
+        {{
+            get => this.values;
+            private set => this.SetProperty(ref this.values, value);
+        }}
+
+        public void Update(long[] timestamps, double[] values)
+        {{
+            this.Timestamps = timestamps;
+            this.Values = values;
+            var validValues = values.Where(value => !double.IsNaN(value)).ToArray();
+            this.SampleCount = validValues.Length;
+            this.Minimum = validValues.Length == 0 ? double.NaN : validValues.Min();
+            this.Maximum = validValues.Length == 0 ? double.NaN : validValues.Max();
+        }}
+    }}
+}}
+'''
+
 PARAMETER_VIEWMODEL_TEMPLATE = '''using DisplayPluginLibrary;
 
 namespace {namespace}
@@ -271,6 +477,27 @@ BASIC_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                    Foreground="White"
                    FontSize="20" />
     </Grid>
+</UserControl>
+'''
+
+TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
+             x:Class="{namespace}.{view_class}">
+    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{{Binding Series}}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border BorderBrush="DarkGray" BorderThickness="1" Padding="12" Margin="4">
+                        <StackPanel>
+                            <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
+                            <TextBlock Text="{{Binding SampleCount, StringFormat=Samples: {{0}}}}" Foreground="White" />
+                            <TextBlock Text="{{Binding Minimum, StringFormat=Minimum: {{0:F3}}}}" Foreground="White" />
+                            <TextBlock Text="{{Binding Maximum, StringFormat=Maximum: {{0:F3}}}}" Foreground="White" />
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </ScrollViewer>
 </UserControl>
 '''
 
@@ -463,11 +690,12 @@ SERVICE_DEFINITIONS = {
 }
 
 BEHAVIOR_CURRENT_VALUE = 'Current value at cursor'
+BEHAVIOR_VISIBLE_RANGE = 'Visible range data'
 BEHAVIOR_BASIC = 'Basic display'
 
 
 def behavior_uses_parameters(behavior):
-    if behavior == BEHAVIOR_CURRENT_VALUE:
+    if behavior in (BEHAVIOR_CURRENT_VALUE, BEHAVIOR_VISIBLE_RANGE):
         return True
     if behavior == BEHAVIOR_BASIC:
         return False
@@ -516,10 +744,12 @@ def validate_icon_path(icon_path):
     return icon_path
 
 
-def generate_plugin(name, base_out, include_view=True, include_parameters=True, atlas_parameters=None,
+def generate_plugin(name, base_out, include_view=True, include_parameters=True, behavior=None, atlas_parameters=None,
                     display_property_specs=None, parameter_max_count=100, workspace_root=None,
                     description=None, library_project=None, icon_path=None, service_names=None):
     name = normalize_plugin_name(name)
+    behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
+    include_parameters = behavior_uses_parameters(behavior)
     if not isinstance(parameter_max_count, int) or parameter_max_count < 1:
         raise ValueError('Maximum parameter count must be a positive integer.')
     validated_atlas_parameters = []
@@ -531,7 +761,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     atlas_parameters = validated_atlas_parameters
     display_property_specs = list(display_property_specs or [])
     if atlas_parameters and not include_parameters:
-        raise ValueError('ATLAS parameters require the Current value at cursor behavior.')
+        raise ValueError('ATLAS parameters require a data behavior.')
     if len(atlas_parameters) > parameter_max_count:
         raise ValueError('Maximum parameter count cannot be lower than the number of ATLAS parameters.')
     namespace = name
@@ -591,8 +821,15 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             f'\t\t{{{library_project_guid}}}.Release|x64.Build.0 = Release|x64'
         )
 
-    viewmodel_template = VIEWMODEL_TEMPLATE if include_parameters else BASIC_VIEWMODEL_TEMPLATE
-    view_template = VIEW_XAML_TEMPLATE if include_parameters else BASIC_VIEW_XAML_TEMPLATE
+    if behavior == BEHAVIOR_CURRENT_VALUE:
+        viewmodel_template = VIEWMODEL_TEMPLATE
+        view_template = VIEW_XAML_TEMPLATE
+    elif behavior == BEHAVIOR_VISIBLE_RANGE:
+        viewmodel_template = TIMEBASE_VIEWMODEL_TEMPLATE
+        view_template = TIMEBASE_VIEW_XAML_TEMPLATE
+    else:
+        viewmodel_template = BASIC_VIEWMODEL_TEMPLATE
+        view_template = BASIC_VIEW_XAML_TEMPLATE
     atlas_parameter_setup = ''
     display_property_fields = ''
     display_properties = ''
@@ -662,8 +899,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             parameter_max_count=parameter_max_count,
         ),
     }
-    if include_parameters:
+    if behavior == BEHAVIOR_CURRENT_VALUE:
         files['ParameterViewModel.cs'] = PARAMETER_VIEWMODEL_TEMPLATE.format(namespace=namespace)
+    elif behavior == BEHAVIOR_VISIBLE_RANGE:
+        files['TimebaseSeriesViewModel.cs'] = TIMEBASE_SERIES_VIEWMODEL_TEMPLATE.format(namespace=namespace)
     if include_view:
         files[f'{name}View.xaml'] = view_template.format(
             namespace=namespace,
@@ -782,14 +1021,14 @@ class PluginGeneratorApp(tk.Tk):
         behavior_combo = ttk.Combobox(
             config_frame,
             textvariable=self.behavior_var,
-            values=(BEHAVIOR_CURRENT_VALUE, BEHAVIOR_BASIC),
+            values=(BEHAVIOR_CURRENT_VALUE, BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_BASIC),
             state='readonly',
         )
         behavior_combo.pack(fill=tk.X, pady=(0, 4))
         behavior_combo.bind('<<ComboboxSelected>>', lambda event: self.update_behavior_states())
         tk.Label(
             config_frame,
-            text='Current value follows the ATLAS cursor. Basic display adds no automatic data retrieval.',
+            text='Current value follows the cursor. Visible range retrieves samples across the displayed time range.',
             font=('Arial', 8, 'italic'), justify='left', wraplength=600,
         ).pack(anchor='w', pady=(0, 4))
         
@@ -802,7 +1041,7 @@ class PluginGeneratorApp(tk.Tk):
 
         tk.Label(
             services_frame,
-            text='ISignalBus and IDataRequestSignalFactory are always injected for Current value at cursor plugins.',
+            text='ISignalBus and IDataRequestSignalFactory are always injected for data behaviors.',
             font=('Arial', 8, 'italic'), justify='left', wraplength=600,
         ).pack(anchor='w', pady=(0, 4))
 
@@ -1053,7 +1292,7 @@ class PluginGeneratorApp(tk.Tk):
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
-        # Current-value behavior injects these services through the parameter base class.
+        # Data behaviors inject these services through DisplayPluginLibrary base classes.
         parameters_enabled = behavior_uses_parameters(self.behavior_var.get())
         for service_name in ('ISignalBus', 'IDataRequestSignalFactory'):
             checkbutton = self.service_checkbuttons[service_name]
@@ -1088,7 +1327,7 @@ class PluginGeneratorApp(tk.Tk):
             if not base_out:
                 raise ValueError('Select an output folder before generating.')
             if include_parameters and not library_project:
-                raise ValueError('Select DisplayPluginLibrary.csproj before generating a current-value plugin.')
+                raise ValueError('Select DisplayPluginLibrary.csproj before generating a data plugin.')
             if not icon_path:
                 raise ValueError('Select a PNG icon before generating the plugin.')
             atlas_parameters = []
@@ -1101,7 +1340,7 @@ class PluginGeneratorApp(tk.Tk):
             display_property_specs = list(self.display_property_specs)
             parameter_max_count = int(self.parameter_max_var.get())
             if atlas_parameters and not include_parameters:
-                raise ValueError('ATLAS parameters require the Current value at cursor behavior.')
+                raise ValueError('ATLAS parameters require Current value or Visible range behavior.')
             service_names = [name for name, var in self.service_vars.items() if var.get()]
             os.makedirs(base_out, exist_ok=True)
             target = generate_plugin(
@@ -1109,6 +1348,7 @@ class PluginGeneratorApp(tk.Tk):
                 base_out,
                 include_view=self.add_view_var.get(),
                 include_parameters=include_parameters,
+                behavior=self.behavior_var.get(),
                 atlas_parameters=atlas_parameters,
                 display_property_specs=display_property_specs,
                 parameter_max_count=parameter_max_count,

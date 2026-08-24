@@ -5,6 +5,7 @@ from pathlib import Path
 from tools.PluginGenerator.gui import (
     BEHAVIOR_BASIC,
     BEHAVIOR_CURRENT_VALUE,
+    BEHAVIOR_VISIBLE_RANGE,
     behavior_uses_parameters,
     build_atlas_parameter,
     build_display_property,
@@ -24,6 +25,9 @@ class ParameterAndPropertyTests(unittest.TestCase):
 
     def test_basic_behavior_does_not_use_parameter_support(self):
         self.assertFalse(behavior_uses_parameters(BEHAVIOR_BASIC))
+
+    def test_visible_range_behavior_uses_parameter_support(self):
+        self.assertTrue(behavior_uses_parameters(BEHAVIOR_VISIBLE_RANGE))
 
     def test_atlas_identifier_accepts_colons(self):
         self.assertEqual('vCar:Chassis', build_atlas_parameter(' vCar:Chassis '))
@@ -83,12 +87,35 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('public string FontSize', viewmodel)
         self.assertNotIn('AddParameterContainer', viewmodel)
 
-    def test_atlas_parameters_require_dynamic_support(self):
-        with self.assertRaisesRegex(ValueError, 'Current value at cursor'):
+    def test_atlas_parameters_require_data_behavior(self):
+        with self.assertRaisesRegex(ValueError, 'data behavior'):
             self.generate(
                 include_parameters=False,
                 atlas_parameters=['vCar:Chassis'],
             )
+
+    def test_visible_range_generates_safe_timebase_workflow(self):
+        target = self.generate(
+            behavior=BEHAVIOR_VISIBLE_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            atlas_parameters=['vCar:Chassis'],
+        )
+        project = target / 'SeparationPlugin'
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+        series = (project / 'TimebaseSeriesViewModel.cs').read_text(encoding='utf-8')
+        view = (project / 'SeparationPluginView.xaml').read_text(encoding='utf-8')
+
+        self.assertIn('TemplateDisplayViewModelBase', viewmodel)
+        self.assertIn('OnMakeTimebaseDataRequestsAsync', viewmodel)
+        self.assertIn('CreateDataRequestSignal', viewmodel)
+        self.assertIn('signal.SourceId == this.ScopeIdentity.Guid', viewmodel)
+        self.assertIn('parameterValues.Lock()', viewmodel)
+        self.assertIn('parameterValues.Unlock()', viewmodel)
+        self.assertIn('ExecuteOnUiAsync', viewmodel)
+        self.assertIn('IReadOnlyList<long> Timestamps', series)
+        self.assertIn('IReadOnlyList<double> Values', series)
+        self.assertIn('ItemsSource="{Binding Series}"', view)
+        self.assertFalse((project / 'ParameterViewModel.cs').exists())
 
 
 if __name__ == '__main__':

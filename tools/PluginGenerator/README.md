@@ -17,9 +17,12 @@ python -m tools.PluginGenerator.generator MyPlugin
 Choose one plugin behavior:
 
 - **Current value at cursor** (default) follows the ATLAS cursor and displays the latest value for each configured parameter.
+- **Visible range data** retrieves samples across the visible ATLAS time range and exposes timestamps, values, sample count, minimum, and maximum for each parameter.
 - **Basic display** creates a view and ViewModel without automatic ATLAS data retrieval.
 
-Use `--behavior current-value` or `--behavior basic` from the CLI.
+Use `--behavior current-value`, `--behavior visible-range`, or `--behavior basic` from the CLI.
+
+Visible-range plugins inherit `TemplateDisplayViewModelBase`, so session, parameter, visibility, and timebase changes automatically trigger throttled refreshes. Generated result handling filters by display identity, locks and unlocks `ParameterValues` safely, and moves ViewModel updates onto the UI thread. The generated `TimebaseSeriesViewModel` retains the raw `Timestamps` and `Values` collections for a custom graph while the starter view displays summary statistics.
 
 On first use, provide the paths explicitly:
 
