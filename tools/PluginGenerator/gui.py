@@ -18,7 +18,7 @@ CS_PROJ_TEMPLATE = r'''<Project Sdk="Microsoft.NET.Sdk">
     <ProjectGuid>{{{project_guid}}}</ProjectGuid>
   </PropertyGroup>
   <ItemGroup>
-        <Resource Include="Resources\icon.png" />
+        <Resource Include="Resources\{icon_filename}" />
     <PackageReference Include="Atlas.DisplayAPI" Version="11.4.4.371-W48" />
     <PackageReference Include="System.ComponentModel.Composition" Version="7.0.0" />
   </ItemGroup>
@@ -110,7 +110,7 @@ namespace {namespace}
         [DisplayPlugin(
             View = typeof({view_class}),
             ViewModel = typeof({viewmodel_class}),
-            IconUri = "Resources/icon.png")]
+            IconUri = "Resources/{icon_filename}")]
         private sealed class Plugin : DisplayPlugin<Plugin>
         {{
         }}
@@ -361,7 +361,16 @@ def escape_csharp_string(value):
     return value.replace('\\', '\\\\').replace('"', '\\"')
 
 
-def generate_plugin(name, base_out, include_view=True, include_parameters=True, parameter_names=None, parameter_max_count=100, workspace_root=None, description=None, library_project=None):
+def validate_icon_path(icon_path):
+    icon_path = os.path.abspath(icon_path or '')
+    if not os.path.isfile(icon_path):
+        raise FileNotFoundError('Select a valid PNG icon before generating the plugin.')
+    if os.path.splitext(icon_path)[1].lower() != '.png':
+        raise ValueError('The plugin icon must be a PNG file.')
+    return icon_path
+
+
+def generate_plugin(name, base_out, include_view=True, include_parameters=True, parameter_names=None, parameter_max_count=100, workspace_root=None, description=None, library_project=None, icon_path=None):
     name = normalize_plugin_name(name)
     if not isinstance(parameter_max_count, int) or parameter_max_count < 1:
         raise ValueError('Maximum parameter count must be a positive integer.')
@@ -370,18 +379,20 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError('Maximum parameter count cannot be lower than the number of custom parameters.')
     namespace = name
     workspace_root = os.path.abspath(workspace_root or default_workspace_root())
+    icon_path = validate_icon_path(icon_path)
+    icon_filename = os.path.basename(icon_path)
     target = os.path.join(base_out, name)
     project_directory = os.path.join(target, name)
     os.makedirs(project_directory, exist_ok=True)
     resources_dir = os.path.join(project_directory, 'Resources')
     os.makedirs(resources_dir, exist_ok=True)
-    shutil.copyfile(os.path.join(workspace_root, 'icon.png'), os.path.join(resources_dir, 'icon.png'))
+    shutil.copyfile(icon_path, os.path.join(resources_dir, icon_filename))
 
     project_guid = str(uuid.uuid4()).upper()
     assembly_guid = str(uuid.uuid4()).upper()
     description = description or f'{name} ATLAS display plugin'
 
-    csproj = CS_PROJ_TEMPLATE.format(project_guid=project_guid)
+    csproj = CS_PROJ_TEMPLATE.format(project_guid=project_guid, icon_filename=icon_filename)
     if include_parameters:
         library_project = os.path.abspath(library_project or '')
         if not os.path.isfile(library_project):
@@ -422,6 +433,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             namespace=namespace,
             view_class=f'{name}View',
             viewmodel_class=f'{name}ViewModel',
+            icon_filename=icon_filename,
         ),
         f'{name}ViewModel.cs': viewmodel_template.format(
             namespace=namespace,
@@ -522,6 +534,11 @@ class PluginGeneratorApp(tk.Tk):
         self.library_var = tk.StringVar(value=settings.get('library_project', ''))
         tk.Entry(output_frame, textvariable=self.library_var, width=45).grid(row=1, column=1, sticky='ew', padx=8)
         tk.Button(output_frame, text='Browse', command=self.browse_library).grid(row=1, column=2, padx=6)
+
+        tk.Label(output_frame, text='Plugin icon (.png):').grid(row=2, column=0, sticky='w', pady=6)
+        self.icon_var = tk.StringVar(value=settings.get('icon_path', ''))
+        tk.Entry(output_frame, textvariable=self.icon_var, width=45).grid(row=2, column=1, sticky='ew', padx=8)
+        tk.Button(output_frame, text='Browse', command=self.browse_icon).grid(row=2, column=2, padx=6)
         
         # === View & Parameter Configuration ===
         config_frame = tk.LabelFrame(scrollable_frame, text='View & Parameter Configuration', padx=8, pady=8)
@@ -593,10 +610,21 @@ class PluginGeneratorApp(tk.Tk):
         if path:
             self.library_var.set(path)
 
+    def browse_icon(self):
+        initial = self.icon_var.get()
+        initial_dir = os.path.dirname(initial) if os.path.isfile(initial) else os.getcwd()
+        path = filedialog.askopenfilename(
+            initialdir=initial_dir,
+            filetypes=[('PNG image', '*.png')],
+        )
+        if path:
+            self.icon_var.set(path)
+
     def reset_form(self):
         self.name_var.set('')
         self.description_var.set('')
         self.parameter_text.delete('1.0', tk.END)
+        self.icon_var.set('')
         self.parameter_max_var.set('100')
         self.add_view_var.set(True)
         self.add_parameters_var.set(True)
@@ -609,6 +637,7 @@ class PluginGeneratorApp(tk.Tk):
         clear_settings()
         self.out_var.set('')
         self.library_var.set('')
+        self.icon_var.set('')
         messagebox.showinfo('Clear Saved Paths', 'Persisted paths were cleared.')
 
     def generate(self):
@@ -619,11 +648,14 @@ class PluginGeneratorApp(tk.Tk):
 
         base_out = self.out_var.get().strip()
         library_project = self.library_var.get().strip()
+        icon_path = self.icon_var.get().strip()
         try:
             if not base_out:
                 raise ValueError('Select an output folder before generating.')
             if self.add_parameters_var.get() and not library_project:
                 raise ValueError('Select DisplayPluginLibrary.csproj before generating a parameter plugin.')
+            if not icon_path:
+                raise ValueError('Select a PNG icon before generating the plugin.')
             parameter_names = parse_parameter_names(self.parameter_text.get('1.0', 'end'))
             parameter_max_count = int(self.parameter_max_var.get())
             if parameter_names and not self.add_parameters_var.get():
@@ -639,10 +671,12 @@ class PluginGeneratorApp(tk.Tk):
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,
                 library_project=library_project,
+                icon_path=icon_path,
             )
             save_settings({
                 'output_folder': base_out,
                 'library_project': library_project,
+                'icon_path': icon_path,
             })
 
             # Show success message

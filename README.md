@@ -17,10 +17,10 @@ python -m tools.PluginGenerator.generator MyPlugin
 On first use, provide the paths explicitly:
 
 ```powershell
-python -m tools.PluginGenerator.generator MyPlugin --output C:\path\to\output --library-project C:\path\to\DisplayPluginLibrary.csproj
+python -m tools.PluginGenerator.generator MyPlugin --output C:\path\to\output --library-project C:\path\to\DisplayPluginLibrary.csproj --icon C:\path\to\icon.png
 ```
 
-The GUI provides Browse controls for both paths. After a successful generation, the selected output and library paths are persisted in the operating system's per-user application settings and can be changed later in the GUI or overridden with the CLI options. No machine-specific paths are stored in this repository or in generated project files.
+The GUI provides Browse controls for the output folder, library project, and PNG icon. After a successful generation, the selected paths are persisted in the operating system's per-user application settings and can be changed later in the GUI or overridden with the CLI options. The selected icon is copied into the generated project's `Resources` folder and referenced by filename in both the `.csproj` resource entry and `IconUri`. No machine-specific paths are stored in this repository or in generated project files.
 
 To reset the persisted paths for testing first-use behavior:
 
