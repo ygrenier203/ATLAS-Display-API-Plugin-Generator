@@ -138,7 +138,7 @@ namespace {namespace}
     [DisplayPluginSettings(ParametersMaxCount = {parameter_max_count})]
     public sealed class {viewmodel_class} : ParameterSampleDisplayViewModelBase<ParameterViewModel>
     {{
-{custom_parameter_fields}
+{display_property_fields}
         public {viewmodel_class}(
             ISignalBus signalBus,
             IDataRequestSignalFactory dataRequestSignalFactory,
@@ -147,14 +147,17 @@ namespace {namespace}
         {{
 {extra_ctor_assignments}        }}
 
-{custom_parameter_properties}
-    {custom_parameter_setup}
+{display_properties}
+    {atlas_parameter_setup}
         protected override ParameterViewModel OnCreateParameterViewModel() => new ParameterViewModel();
     }}
 }}
 '''
 
-BASIC_VIEWMODEL_TEMPLATE = '''{extra_usings}using MAT.Atlas.Client.Presentation.Displays;
+BASIC_VIEWMODEL_TEMPLATE = '''using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+
+{extra_usings}using MAT.Atlas.Client.Presentation.Displays;
 using MAT.Atlas.Client.Presentation.Plugins;
 
 namespace {namespace}
@@ -162,7 +165,9 @@ namespace {namespace}
     [DisplayPluginSettings(ParametersMaxCount = {parameter_max_count})]
     public sealed class {viewmodel_class} : DisplayPluginViewModel
     {{
-{service_members}    }}
+{display_property_fields}
+{service_members}
+{display_properties}    }}
 }}
 '''
 
@@ -362,12 +367,21 @@ def to_camel_case(identifier):
     return identifier[:1].lower() + identifier[1:] if identifier else identifier
 
 
-def build_parameter_spec(name, display_name='', category='', description='', order='', persisted=False, browsable=True, existing_names=None):
+def build_atlas_parameter(identifier, existing_identifiers=None):
+    identifier = (identifier or '').strip()
+    if not identifier:
+        raise ValueError('ATLAS parameter identifier is required.')
+    if existing_identifiers and identifier in existing_identifiers:
+        raise ValueError(f'ATLAS parameter "{identifier}" already exists.')
+    return identifier
+
+
+def build_display_property_spec(name, display_name='', category='', description='', order='', persisted=False, browsable=True, existing_names=None):
     name = (name or '').strip()
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
-        raise ValueError(f'Parameter identifier "{name}" must be a valid C# identifier.')
+        raise ValueError(f'Display property name "{name}" must be a valid C# identifier.')
     if existing_names and name in existing_names:
-        raise ValueError(f'A parameter named "{name}" already exists.')
+        raise ValueError(f'A display property named "{name}" already exists.')
     display_name = (display_name or '').strip()
     category = (category or '').strip()
     description = (description or '').strip()
@@ -377,7 +391,7 @@ def build_parameter_spec(name, display_name='', category='', description='', ord
     elif re.fullmatch(r'-?\d+', order_text):
         order_value = int(order_text)
     else:
-        raise ValueError(f'Parameter "{name}" order must be an integer.')
+        raise ValueError(f'Display property "{name}" order must be an integer.')
     return {
         'name': name,
         'display_name': display_name,
@@ -393,12 +407,12 @@ def escape_csharp_string(value):
     return value.replace('\\', '\\\\').replace('"', '\\"')
 
 
-def build_parameter_field(spec):
+def build_display_property_field(spec):
     field = '_' + to_camel_case(spec['name'])
     return f'        private string {field};'
 
 
-def build_parameter_property(spec):
+def build_display_property(spec):
     field = '_' + to_camel_case(spec['name'])
     default_value = escape_csharp_string(spec['name'])
     if spec['persisted']:
@@ -431,7 +445,7 @@ def build_parameter_property(spec):
     attribute_block = ''.join(f'{attribute}\n' for attribute in attributes)
     return (
         f'{attribute_block}'
-        f'        public string {spec["name"].capitalize()}\n'
+        f'        public string {spec["name"]}\n'
         '        {\n'
         f'{accessor}'
         '        }\n'
@@ -491,13 +505,24 @@ def validate_icon_path(icon_path):
     return icon_path
 
 
-def generate_plugin(name, base_out, include_view=True, include_parameters=True, parameter_specs=None, parameter_max_count=100, workspace_root=None, description=None, library_project=None, icon_path=None, service_names=None):
+def generate_plugin(name, base_out, include_view=True, include_parameters=True, atlas_parameters=None,
+                    display_property_specs=None, parameter_max_count=100, workspace_root=None,
+                    description=None, library_project=None, icon_path=None, service_names=None):
     name = normalize_plugin_name(name)
     if not isinstance(parameter_max_count, int) or parameter_max_count < 1:
         raise ValueError('Maximum parameter count must be a positive integer.')
-    parameter_specs = list(parameter_specs or [])
-    if len(parameter_specs) > parameter_max_count:
-        raise ValueError('Maximum parameter count cannot be lower than the number of custom parameters.')
+    validated_atlas_parameters = []
+    existing_atlas_parameters = set()
+    for identifier in atlas_parameters or []:
+        validated_identifier = build_atlas_parameter(identifier, existing_atlas_parameters)
+        validated_atlas_parameters.append(validated_identifier)
+        existing_atlas_parameters.add(validated_identifier)
+    atlas_parameters = validated_atlas_parameters
+    display_property_specs = list(display_property_specs or [])
+    if atlas_parameters and not include_parameters:
+        raise ValueError('Enable dynamic parameter support to add ATLAS parameters.')
+    if len(atlas_parameters) > parameter_max_count:
+        raise ValueError('Maximum parameter count cannot be lower than the number of ATLAS parameters.')
     namespace = name
     workspace_root = os.path.abspath(workspace_root or default_workspace_root())
     icon_path = validate_icon_path(icon_path)
@@ -557,23 +582,28 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
 
     viewmodel_template = VIEWMODEL_TEMPLATE if include_parameters else BASIC_VIEWMODEL_TEMPLATE
     view_template = VIEW_XAML_TEMPLATE if include_parameters else BASIC_VIEW_XAML_TEMPLATE
-    parameter_setup = ''
-    custom_parameter_fields = ''
-    custom_parameter_properties = ''
-    if include_parameters and parameter_specs:
+    atlas_parameter_setup = ''
+    display_property_fields = ''
+    display_properties = ''
+    if include_parameters and atlas_parameters:
         registrations = '\n'.join(
-                f'            DisplayParameterService.AddParameterContainer("{escape_csharp_string(spec["name"].capitalize())}");'
-            for spec in parameter_specs
+                f'            this.DisplayParameterService.AddParameterContainer("{escape_csharp_string(identifier)}");'
+            for identifier in atlas_parameters
         )
-        parameter_setup = (
+        atlas_parameter_setup = (
             '        protected override void OnInitialised()\n'
             '        {\n'
             '            base.OnInitialised();\n'
             f'{registrations}\n'
             '        }\n'
         )
-        custom_parameter_fields = '\n'.join(build_parameter_field(spec) for spec in parameter_specs)
-        custom_parameter_properties = '\n'.join(build_parameter_property(spec) for spec in parameter_specs)
+    if display_property_specs:
+        display_property_fields = '\n'.join(
+            build_display_property_field(spec) for spec in display_property_specs
+        )
+        display_properties = '\n'.join(
+            build_display_property(spec) for spec in display_property_specs
+        )
 
     # ISignalBus/IDataRequestSignalFactory are always injected by ParameterSampleDisplayViewModelBase.
     requested_services = list(service_names or [])
@@ -588,7 +618,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     service_members = ''
     if include_parameters:
         extra_service_fields = build_service_fields(service_entries)
-        custom_parameter_fields = '\n'.join(filter(None, [custom_parameter_fields, extra_service_fields]))
+        display_property_fields = '\n'.join(filter(None, [display_property_fields, extra_service_fields]))
         extra_ctor_params = ''.join(f',\n            {entry["interface"]} {entry["param"]}' for entry in service_entries)
         extra_ctor_assignments = ''.join(f'            this.{entry["param"]} = {entry["param"]};\n' for entry in service_entries)
     else:
@@ -611,9 +641,9 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             namespace=namespace,
             viewmodel_class=f'{name}ViewModel',
             view_class=f'{name}View',
-            custom_parameter_setup=parameter_setup,
-            custom_parameter_fields=custom_parameter_fields,
-            custom_parameter_properties=custom_parameter_properties,
+            atlas_parameter_setup=atlas_parameter_setup,
+            display_property_fields=display_property_fields,
+            display_properties=display_properties,
             extra_usings=extra_usings,
             extra_ctor_params=extra_ctor_params,
             extra_ctor_assignments=extra_ctor_assignments,
@@ -761,11 +791,27 @@ class PluginGeneratorApp(tk.Tk):
             self.service_checkbuttons[service_name] = checkbutton
         self.update_service_checkbox_states()
         
-        # === Custom Parameters ===
-        param_frame = tk.LabelFrame(scrollable_frame, text='Custom Parameters', padx=8, pady=8)
-        param_frame.pack(fill=tk.BOTH, expand=True, pady=8)
+        # === ATLAS Parameters ===
+        atlas_frame = tk.LabelFrame(scrollable_frame, text='ATLAS Parameters', padx=8, pady=8)
+        atlas_frame.pack(fill=tk.X, pady=8)
+        tk.Label(
+            atlas_frame,
+            text='One ATLAS identifier per line, for example vCar:Chassis. These are added in OnInitialised().',
+            font=('Arial', 8, 'italic'), justify='left', wraplength=600,
+        ).pack(anchor='w', pady=(0, 4))
+        self.atlas_parameter_text = tk.Text(atlas_frame, height=4, wrap=tk.WORD)
+        self.atlas_parameter_text.pack(fill=tk.X)
 
-        self.parameter_specs = []
+        # === Display Properties ===
+        property_frame = tk.LabelFrame(scrollable_frame, text='Display Properties', padx=8, pady=8)
+        property_frame.pack(fill=tk.BOTH, expand=True, pady=8)
+        tk.Label(
+            property_frame,
+            text='Settings shown in the ATLAS properties window and optionally saved in the workbook.',
+            font=('Arial', 8, 'italic'), justify='left', wraplength=600,
+        ).pack(anchor='w', pady=(0, 4))
+
+        self.display_property_specs = []
 
         tree_columns = ('identifier', 'display_name', 'category', 'order', 'persisted', 'browsable')
         column_headings = {
@@ -777,18 +823,18 @@ class PluginGeneratorApp(tk.Tk):
             'browsable': 'Browsable',
         }
         column_widths = {'identifier': 120, 'display_name': 140, 'category': 100, 'order': 50, 'persisted': 70, 'browsable': 70}
-        self.parameter_tree = ttk.Treeview(param_frame, columns=tree_columns, show='headings', height=6)
+        self.property_tree = ttk.Treeview(property_frame, columns=tree_columns, show='headings', height=6)
         for column in tree_columns:
-            self.parameter_tree.heading(column, text=column_headings[column])
-            self.parameter_tree.column(column, width=column_widths[column], anchor='w')
-        self.parameter_tree.pack(fill=tk.BOTH, expand=True, pady=4)
-        self.parameter_tree.bind('<Double-1>', lambda event: self.edit_selected_parameter())
+            self.property_tree.heading(column, text=column_headings[column])
+            self.property_tree.column(column, width=column_widths[column], anchor='w')
+        self.property_tree.pack(fill=tk.BOTH, expand=True, pady=4)
+        self.property_tree.bind('<Double-1>', lambda event: self.edit_selected_property())
 
-        parameter_button_frame = tk.Frame(param_frame)
-        parameter_button_frame.pack(fill=tk.X, pady=4)
-        tk.Button(parameter_button_frame, text='Add...', command=self.add_parameter_dialog).pack(side=tk.LEFT, padx=4)
-        tk.Button(parameter_button_frame, text='Edit...', command=self.edit_selected_parameter).pack(side=tk.LEFT, padx=4)
-        tk.Button(parameter_button_frame, text='Remove', command=self.remove_selected_parameter).pack(side=tk.LEFT, padx=4)
+        property_button_frame = tk.Frame(property_frame)
+        property_button_frame.pack(fill=tk.X, pady=4)
+        tk.Button(property_button_frame, text='Add...', command=self.add_property_dialog).pack(side=tk.LEFT, padx=4)
+        tk.Button(property_button_frame, text='Edit...', command=self.edit_selected_property).pack(side=tk.LEFT, padx=4)
+        tk.Button(property_button_frame, text='Remove', command=self.remove_selected_property).pack(side=tk.LEFT, padx=4)
         
         # === Advanced Settings ===
         advanced_frame = tk.LabelFrame(scrollable_frame, text='Advanced Settings', padx=8, pady=8)
@@ -860,10 +906,10 @@ class PluginGeneratorApp(tk.Tk):
         if path:
             self.icon_var.set(path)
 
-    def refresh_parameter_tree(self):
-        self.parameter_tree.delete(*self.parameter_tree.get_children())
-        for spec in self.parameter_specs:
-            self.parameter_tree.insert('', tk.END, values=(
+    def refresh_property_tree(self):
+        self.property_tree.delete(*self.property_tree.get_children())
+        for spec in self.display_property_specs:
+            self.property_tree.insert('', tk.END, values=(
                 spec['name'],
                 spec['display_name'],
                 spec['category'],
@@ -872,34 +918,34 @@ class PluginGeneratorApp(tk.Tk):
                 'Yes' if spec['browsable'] else 'No',
             ))
 
-    def add_parameter_dialog(self):
-        spec = self._parameter_dialog('Add Parameter')
+    def add_property_dialog(self):
+        spec = self._property_dialog('Add Display Property')
         if spec:
-            self.parameter_specs.append(spec)
-            self.refresh_parameter_tree()
+            self.display_property_specs.append(spec)
+            self.refresh_property_tree()
 
-    def edit_selected_parameter(self):
-        selection = self.parameter_tree.selection()
+    def edit_selected_property(self):
+        selection = self.property_tree.selection()
         if not selection:
-            messagebox.showinfo('Edit Parameter', 'Select a parameter to edit.')
+            messagebox.showinfo('Edit Display Property', 'Select a display property to edit.')
             return
-        index = self.parameter_tree.index(selection[0])
-        current = self.parameter_specs[index]
-        spec = self._parameter_dialog('Edit Parameter', initial=current, editing_name=current['name'])
+        index = self.property_tree.index(selection[0])
+        current = self.display_property_specs[index]
+        spec = self._property_dialog('Edit Display Property', initial=current, editing_name=current['name'])
         if spec:
-            self.parameter_specs[index] = spec
-            self.refresh_parameter_tree()
+            self.display_property_specs[index] = spec
+            self.refresh_property_tree()
 
-    def remove_selected_parameter(self):
-        selection = self.parameter_tree.selection()
+    def remove_selected_property(self):
+        selection = self.property_tree.selection()
         if not selection:
-            messagebox.showinfo('Remove Parameter', 'Select a parameter to remove.')
+            messagebox.showinfo('Remove Display Property', 'Select a display property to remove.')
             return
-        index = self.parameter_tree.index(selection[0])
-        del self.parameter_specs[index]
-        self.refresh_parameter_tree()
+        index = self.property_tree.index(selection[0])
+        del self.display_property_specs[index]
+        self.refresh_property_tree()
 
-    def _parameter_dialog(self, title, initial=None, editing_name=None):
+    def _property_dialog(self, title, initial=None, editing_name=None):
         initial = initial or {}
         dialog = tk.Toplevel(self)
         dialog.title(title)
@@ -917,7 +963,7 @@ class PluginGeneratorApp(tk.Tk):
         browsable_var = tk.BooleanVar(value=initial.get('browsable', True))
 
         fields = [
-            ('Identifier (required):', identifier_var),
+            ('Property Name (required):', identifier_var),
             ('Display Name:', display_name_var),
             ('Category:', category_var),
             ('Description:', description_var),
@@ -935,9 +981,11 @@ class PluginGeneratorApp(tk.Tk):
         result = {}
 
         def on_ok():
-            existing_names = {spec['name'] for spec in self.parameter_specs if spec['name'] != editing_name}
+            existing_names = {
+                spec['name'] for spec in self.display_property_specs if spec['name'] != editing_name
+            }
             try:
-                result['spec'] = build_parameter_spec(
+                result['spec'] = build_display_property_spec(
                     identifier_var.get(),
                     display_name_var.get(),
                     category_var.get(),
@@ -948,7 +996,7 @@ class PluginGeneratorApp(tk.Tk):
                     existing_names=existing_names,
                 )
             except ValueError as error:
-                messagebox.showerror('Invalid Parameter', str(error), parent=dialog)
+                messagebox.showerror('Invalid Display Property', str(error), parent=dialog)
                 return
             dialog.destroy()
 
@@ -967,8 +1015,9 @@ class PluginGeneratorApp(tk.Tk):
     def reset_form(self):
         self.name_var.set('')
         self.description_var.set('')
-        self.parameter_specs = []
-        self.refresh_parameter_tree()
+        self.atlas_parameter_text.delete('1.0', tk.END)
+        self.display_property_specs = []
+        self.refresh_property_tree()
         self.icon_var.set('')
         self.parameter_max_var.set('100')
         self.add_view_var.set(True)
@@ -1015,10 +1064,17 @@ class PluginGeneratorApp(tk.Tk):
                 raise ValueError('Select DisplayPluginLibrary.csproj before generating a parameter plugin.')
             if not icon_path:
                 raise ValueError('Select a PNG icon before generating the plugin.')
-            parameter_specs = list(self.parameter_specs)
+            atlas_parameters = []
+            existing_atlas_parameters = set()
+            for line in self.atlas_parameter_text.get('1.0', tk.END).splitlines():
+                if line.strip():
+                    identifier = build_atlas_parameter(line, existing_atlas_parameters)
+                    atlas_parameters.append(identifier)
+                    existing_atlas_parameters.add(identifier)
+            display_property_specs = list(self.display_property_specs)
             parameter_max_count = int(self.parameter_max_var.get())
-            if parameter_specs and not self.add_parameters_var.get():
-                raise ValueError('Enable dynamic parameter support to generate custom parameters.')
+            if atlas_parameters and not self.add_parameters_var.get():
+                raise ValueError('Enable dynamic parameter support to add ATLAS parameters.')
             service_names = [name for name, var in self.service_vars.items() if var.get()]
             os.makedirs(base_out, exist_ok=True)
             target = generate_plugin(
@@ -1026,7 +1082,8 @@ class PluginGeneratorApp(tk.Tk):
                 base_out,
                 include_view=self.add_view_var.get(),
                 include_parameters=self.add_parameters_var.get(),
-                parameter_specs=parameter_specs,
+                atlas_parameters=atlas_parameters,
+                display_property_specs=display_property_specs,
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,

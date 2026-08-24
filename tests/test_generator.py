@@ -1,0 +1,86 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from tools.PluginGenerator.gui import (
+    build_atlas_parameter,
+    build_display_property,
+    build_display_property_spec,
+    generate_plugin,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+LIBRARY_PROJECT = ROOT / 'DisplayPluginLibrary' / 'DisplayPluginLibrary.csproj'
+ICON = ROOT / 'icon.png'
+
+
+class ParameterAndPropertyTests(unittest.TestCase):
+    def test_atlas_identifier_accepts_colons(self):
+        self.assertEqual('vCar:Chassis', build_atlas_parameter(' vCar:Chassis '))
+
+    def test_atlas_identifier_rejects_duplicates(self):
+        with self.assertRaisesRegex(ValueError, 'already exists'):
+            build_atlas_parameter('vCar:Chassis', {'vCar:Chassis'})
+
+    def test_display_property_requires_csharp_identifier(self):
+        with self.assertRaisesRegex(ValueError, 'valid C# identifier'):
+            build_display_property_spec('vCar:Chassis')
+
+    def test_display_property_preserves_pascal_case(self):
+        spec = build_display_property_spec('FontSize', persisted=True)
+        source = build_display_property(spec)
+
+        self.assertIn('public string FontSize', source)
+        self.assertNotIn('Fontsize', source)
+        self.assertIn('ReadProperty("FontSize")', source)
+        self.assertIn('SaveProperty(value)', source)
+
+
+class GenerationTests(unittest.TestCase):
+    def generate(self, **options):
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        return Path(generate_plugin(
+            'SeparationPlugin',
+            temporary_directory.name,
+            icon_path=str(ICON),
+            **options,
+        ))
+
+    def test_atlas_parameter_is_registered_exactly(self):
+        target = self.generate(
+            include_parameters=True,
+            library_project=str(LIBRARY_PROJECT),
+            atlas_parameters=['vCar:Chassis'],
+        )
+        viewmodel = (
+            target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('AddParameterContainer("vCar:Chassis")', viewmodel)
+        self.assertNotIn('public string Vcar', viewmodel)
+
+    def test_display_property_does_not_register_atlas_parameter(self):
+        spec = build_display_property_spec('FontSize', persisted=True)
+        target = self.generate(
+            include_parameters=False,
+            display_property_specs=[spec],
+        )
+        viewmodel = (
+            target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('public string FontSize', viewmodel)
+        self.assertNotIn('AddParameterContainer', viewmodel)
+
+    def test_atlas_parameters_require_dynamic_support(self):
+        with self.assertRaisesRegex(ValueError, 'dynamic parameter support'):
+            self.generate(
+                include_parameters=False,
+                atlas_parameters=['vCar:Chassis'],
+            )
+
+
+if __name__ == '__main__':
+    unittest.main()

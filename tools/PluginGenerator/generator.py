@@ -10,6 +10,12 @@ def run(args=None):
 	parser.add_argument('--icon', help='path to the plugin PNG icon; required until configured')
 	parser.add_argument('--no-view', action='store_true', help='omit the WPF view files')
 	parser.add_argument('--no-parameters', action='store_true', help='omit dynamic parameter support')
+	parser.add_argument(
+		'--atlas-parameter',
+		action='append',
+		default=[],
+		help='ATLAS parameter identifier to add; repeat for multiple parameters',
+	)
 	parser.add_argument('--max-parameters', type=int, default=100, help='maximum number of display parameters')
 	parser.add_argument('--clear-settings', action='store_true', help='clear persisted paths used by the generator and exit')
 	options = parser.parse_args(args)
@@ -33,6 +39,8 @@ def run(args=None):
 		parser.error('--output is required on first use. Choose the parent folder for the generated plugin.')
 	if not options.no_parameters and not library_project:
 		parser.error('--library-project is required for parameter plugins on first use.')
+	if options.no_parameters and options.atlas_parameter:
+		parser.error('--atlas-parameter requires dynamic parameter support.')
 	if not icon_path:
 		parser.error('--icon is required on first use. Choose the PNG icon for the plugin.')
 	target = generate_plugin(
@@ -40,6 +48,7 @@ def run(args=None):
 		output,
 		include_view=not options.no_view,
 		include_parameters=not options.no_parameters,
+		atlas_parameters=options.atlas_parameter,
 		parameter_max_count=options.max_parameters,
 		workspace_root=default_workspace_root(),
 		library_project=library_project,
