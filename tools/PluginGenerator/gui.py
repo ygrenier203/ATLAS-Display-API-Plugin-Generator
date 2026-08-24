@@ -158,6 +158,7 @@ namespace {namespace}
     {atlas_parameter_setup}
         protected override ParameterViewModel OnCreateParameterViewModel() => new ParameterViewModel();
 
+{session_notification_hooks}
 {command_handlers}
     }}
 }}
@@ -181,6 +182,7 @@ namespace {namespace}
 {status_state_properties}{display_properties}
 {command_properties}
     {atlas_parameter_setup}
+{session_notification_hooks}
 {command_handlers}    }}
 }}
 '''
@@ -266,6 +268,7 @@ namespace {namespace}
 {cursor_request_method}
 {cursor_result_handler}
 
+{session_notification_hooks}
         private async void HandleDataResultSignal(DataResultSignal signal)
         {{
             try
@@ -526,6 +529,7 @@ namespace {namespace}
 {status_state_properties}{display_properties}
 {command_properties}
     {atlas_parameter_setup}
+{session_notification_hooks}
         protected override async Task OnMakeCursorDataRequestsAsync(ICompositeSession compositeSession)
         {{
             await this.ExecuteOnUiAsync(this.SyncRows);
@@ -1458,10 +1462,32 @@ def build_lifecycle_hooks(atlas_parameters, include_hooks):
 '''
 
 
+def build_session_notification_hooks():
+    return '''        public override void OnCompositeSessionLoaded(CompositeSessionEventArgs args)
+        {
+            base.OnCompositeSessionLoaded(args);
+            // TODO: Respond after a session is loaded.
+        }
+
+        public override void OnCompositeSessionUnLoaded(CompositeSessionUnloadedEventArgs args)
+        {
+            base.OnCompositeSessionUnLoaded(args);
+            // TODO: Respond after a session is unloaded.
+        }
+
+        public override void OnCompositeSessionContainerChanged()
+        {
+            base.OnCompositeSessionContainerChanged();
+            // TODO: Respond when the set associated with this display changes.
+        }
+'''
+
+
 def generate_plugin(name, base_out, include_view=True, include_parameters=True, behavior=None, atlas_parameters=None,
                     display_property_specs=None, command_specs=None, parameter_max_count=100, workspace_root=None,
                     description=None, library_project=None, icon_path=None, service_names=None,
-                    include_status_state=False, include_lifecycle_hooks=False):
+                    include_status_state=False, include_lifecycle_hooks=False,
+                    include_session_notifications=False):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -1573,6 +1599,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         extra_service_names = requested_services
     service_entries = build_service_entries(extra_service_names)
     extra_usings = build_service_usings(service_entries)
+    if include_session_notifications and behavior in (BEHAVIOR_CURRENT_VALUE, BEHAVIOR_BASIC):
+        extra_usings += 'using MAT.Atlas.Client.Platform.Sessions;\n'
     extra_ctor_params = ''
     extra_ctor_assignments = ''
     service_members = ''
@@ -1581,6 +1609,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     command_handlers = '\n'.join(build_command_handler(spec) for spec in command_specs)
     command_buttons = ''.join(build_command_button(spec) for spec in command_specs)
     status_state_fields, status_state_properties = build_status_state() if include_status_state else ('', '')
+    session_notification_hooks = build_session_notification_hooks() if include_session_notifications else ''
     if include_parameters:
         extra_service_fields = build_service_fields(service_entries)
         display_property_fields = '\n'.join(filter(None, [display_property_fields, extra_service_fields]))
@@ -1626,6 +1655,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             command_handlers=command_handlers,
             status_state_fields=status_state_fields,
             status_state_properties=status_state_properties,
+            session_notification_hooks=session_notification_hooks,
         ),
     }
     if behavior == BEHAVIOR_CURRENT_VALUE:
@@ -1920,6 +1950,13 @@ class PluginGeneratorApp(tk.Tk):
             text='Generate lifecycle hooks',
             variable=self.lifecycle_hooks_var,
         ).grid(row=4, column=0, columnspan=2, sticky='w', pady=4)
+
+        self.session_notifications_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            advanced_frame,
+            text='Generate session notification hooks',
+            variable=self.session_notifications_var,
+        ).grid(row=5, column=0, columnspan=2, sticky='w', pady=4)
         
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
@@ -2225,6 +2262,7 @@ class PluginGeneratorApp(tk.Tk):
         self.build_after_generation_var.set(True)
         self.status_state_var.set(False)
         self.lifecycle_hooks_var.set(False)
+        self.session_notifications_var.set(False)
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
@@ -2291,6 +2329,7 @@ class PluginGeneratorApp(tk.Tk):
                 command_specs=command_specs,
                 include_status_state=self.status_state_var.get(),
                 include_lifecycle_hooks=self.lifecycle_hooks_var.get(),
+                include_session_notifications=self.session_notifications_var.get(),
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,

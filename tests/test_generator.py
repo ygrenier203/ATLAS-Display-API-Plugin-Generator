@@ -19,6 +19,7 @@ from tools.PluginGenerator.gui import (
     build_command_spec,
     build_status_state,
     build_lifecycle_hooks,
+    build_session_notification_hooks,
     build_display_property,
     build_display_property_field,
     build_display_property_spec,
@@ -160,6 +161,15 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('OnCanRenderDisplayChanged(bool canRender)', source)
         self.assertIn('OnDisposeManagedResources()', source)
 
+    def test_session_notification_hooks_preserve_base_behavior(self):
+        source = build_session_notification_hooks()
+
+        self.assertIn('OnCompositeSessionLoaded(CompositeSessionEventArgs args)', source)
+        self.assertIn('base.OnCompositeSessionLoaded(args);', source)
+        self.assertIn('OnCompositeSessionUnLoaded(CompositeSessionUnloadedEventArgs args)', source)
+        self.assertIn('base.OnCompositeSessionUnLoaded(args);', source)
+        self.assertIn('base.OnCompositeSessionContainerChanged();', source)
+
 
 class GenerationTests(unittest.TestCase):
     def generate(self, **options):
@@ -219,6 +229,15 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('protected override void OnInitialised()', viewmodel)
         self.assertIn('public override void OnActiveDisplayPageChanged(bool isActive)', viewmodel)
         self.assertIn('protected override void OnDisposeManagedResources()', viewmodel)
+
+    def test_basic_plugin_can_generate_session_notifications(self):
+        target = self.generate(include_parameters=False, include_session_notifications=True)
+        viewmodel = (target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+
+        self.assertIn('using MAT.Atlas.Client.Platform.Sessions;', viewmodel)
+        self.assertIn('public override void OnCompositeSessionLoaded', viewmodel)
+        self.assertIn('public override void OnCompositeSessionUnLoaded', viewmodel)
+        self.assertIn('public override void OnCompositeSessionContainerChanged', viewmodel)
         self.assertNotIn('public string Vcar', viewmodel)
 
     def test_generated_project_can_disable_deployment_during_validation(self):
