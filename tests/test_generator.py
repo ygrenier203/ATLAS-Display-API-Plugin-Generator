@@ -20,6 +20,7 @@ from tools.PluginGenerator.gui import (
     build_display_property_spec,
     generate_plugin,
 )
+from tools.PluginGenerator.generator import run
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -136,6 +137,26 @@ class GenerationTests(unittest.TestCase):
             icon_path=str(ICON),
             **options,
         ))
+
+    @patch('tools.PluginGenerator.gui.save_settings')
+    @patch('tools.PluginGenerator.gui.generate_plugin')
+    def test_cli_commands_are_forwarded_to_generation(self, generate, save_settings):
+        generate.return_value = Path('GeneratedPlugin')
+
+        run([
+            'SeparationPlugin',
+            '--behavior', 'basic',
+            '--output', str(ROOT),
+            '--icon', str(ICON),
+            '--command', 'RefreshData',
+            '--command', 'Export',
+        ])
+
+        command_specs = generate.call_args.kwargs['command_specs']
+        self.assertEqual(['RefreshData', 'Export'], [spec['name'] for spec in command_specs])
+        self.assertEqual(['Refresh Data', 'Export'], [spec['button_label'] for spec in command_specs])
+        self.assertTrue(all(spec['include_button'] for spec in command_specs))
+        save_settings.assert_called_once()
 
     def test_atlas_parameter_is_registered_exactly(self):
         target = self.generate(
