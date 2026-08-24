@@ -2504,8 +2504,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace).replace(
                 '__GRAPH_TYPE__', graph_type
             )
-            if graph_type == 'custom':
-                files['CustomGraphRenderer.cs'] = CUSTOM_GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
+            files['CustomGraphRenderer.cs'] = CUSTOM_GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
             if computed_series_specs:
                 files['ComputedGraphSeriesFactory.cs'] = COMPUTED_GRAPH_SERIES_TEMPLATE.format(
                     namespace=namespace,

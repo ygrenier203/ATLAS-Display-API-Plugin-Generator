@@ -495,6 +495,7 @@ class GenerationTests(unittest.TestCase):
 
         self.assertTrue((project / 'GraphSeries.cs').exists())
         self.assertTrue((project / 'GraphRenderer.cs').exists())
+        self.assertTrue((project / 'CustomGraphRenderer.cs').exists())
         self.assertIn('VisualLayer x:Name="GraphVisualLayer"', view)
         self.assertIn('ItemsSource="{Binding Series}"', view)
         self.assertIn('new GraphSeries(', codebehind)
