@@ -181,6 +181,7 @@ namespace {namespace}
 {service_members}
 {status_state_properties}{display_properties}
 {command_properties}
+{item_collection_property}
     {atlas_parameter_setup}
 {session_notification_hooks}
 {command_handlers}    }}
@@ -768,6 +769,23 @@ namespace {namespace}
 }}
 '''
 
+ITEM_VIEWMODEL_TEMPLATE = '''using MAT.Atlas.Api.Core.Presentation;
+
+namespace {namespace}
+{{
+    public sealed class ItemViewModel : BindableBase
+    {{
+        private string name = string.Empty;
+
+        public string Name
+        {{
+            get => this.name;
+            set => this.SetProperty(ref this.name, value);
+        }}
+    }}
+}}
+'''
+
 VIEW_XAML_HEADER = '''<UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -819,11 +837,7 @@ BASIC_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
         <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
             <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="4">
 {command_buttons}            </StackPanel>
-            <TextBlock Text="{view_class}"
-                   VerticalAlignment="Center"
-                   HorizontalAlignment="Center"
-                   Foreground="White"
-                   FontSize="20" />
+{basic_content}
         </StackPanel>
     </Grid>
 </UserControl>
@@ -854,6 +868,20 @@ TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
     </ScrollViewer>
 </UserControl>
 '''
+
+BASIC_PLACEHOLDER_CONTENT = '''            <TextBlock Text="{view_class}"
+                   VerticalAlignment="Center"
+                   HorizontalAlignment="Center"
+                   Foreground="White"
+                   FontSize="20" />'''
+
+BASIC_ITEM_COLLECTION_CONTENT = '''            <ItemsControl ItemsSource="{Binding Items}">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding Name}" Foreground="White" Margin="4" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>'''
 
 COMPARE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
              x:Class="{namespace}.{view_class}">
@@ -1487,7 +1515,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     display_property_specs=None, command_specs=None, parameter_max_count=100, workspace_root=None,
                     description=None, library_project=None, icon_path=None, service_names=None,
                     include_status_state=False, include_lifecycle_hooks=False,
-                    include_session_notifications=False):
+                    include_session_notifications=False, include_item_collection=False):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -1505,6 +1533,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     validate_display_property_actions(display_property_specs, behavior)
     if atlas_parameters and not include_parameters:
         raise ValueError('ATLAS parameters require a data behavior.')
+    if include_item_collection and behavior != BEHAVIOR_BASIC:
+        raise ValueError('The starter item collection is only available for basic displays.')
     if len(atlas_parameters) > parameter_max_count:
         raise ValueError('Maximum parameter count cannot be lower than the number of ATLAS parameters.')
     namespace = name
@@ -1601,6 +1631,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     extra_usings = build_service_usings(service_entries)
     if include_session_notifications and behavior in (BEHAVIOR_CURRENT_VALUE, BEHAVIOR_BASIC):
         extra_usings += 'using MAT.Atlas.Client.Platform.Sessions;\n'
+    if include_item_collection:
+        extra_usings += 'using System.Collections.ObjectModel;\n'
     extra_ctor_params = ''
     extra_ctor_assignments = ''
     service_members = ''
@@ -1610,6 +1642,12 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     command_buttons = ''.join(build_command_button(spec) for spec in command_specs)
     status_state_fields, status_state_properties = build_status_state() if include_status_state else ('', '')
     session_notification_hooks = build_session_notification_hooks() if include_session_notifications else ''
+    item_collection_property = (
+        '        [Browsable(false)]\n'
+        '        public ObservableCollection<ItemViewModel> Items { get; } =\n'
+        '            new ObservableCollection<ItemViewModel>();\n'
+        if include_item_collection else ''
+    )
     if include_parameters:
         extra_service_fields = build_service_fields(service_entries)
         display_property_fields = '\n'.join(filter(None, [display_property_fields, extra_service_fields]))
@@ -1656,6 +1694,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             status_state_fields=status_state_fields,
             status_state_properties=status_state_properties,
             session_notification_hooks=session_notification_hooks,
+            item_collection_property=item_collection_property,
         ),
     }
     if behavior == BEHAVIOR_CURRENT_VALUE:
@@ -1673,12 +1712,19 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         files['CompareSessionValueViewModel.cs'] = COMPARE_SESSION_VALUE_VIEWMODEL_TEMPLATE.format(
             namespace=namespace,
         )
+    elif include_item_collection:
+        files['ItemViewModel.cs'] = ITEM_VIEWMODEL_TEMPLATE.format(namespace=namespace)
     if include_view:
         files[f'{name}View.xaml'] = view_template.format(
             namespace=namespace,
             view_class=f'{name}View',
             current_value_text=(CURRENT_VALUE_TEXT if behavior == BEHAVIOR_CURRENT_AND_RANGE else ''),
             command_buttons=command_buttons,
+            basic_content=(
+                BASIC_ITEM_COLLECTION_CONTENT
+                if include_item_collection
+                else BASIC_PLACEHOLDER_CONTENT.format(view_class=f'{name}View')
+            ),
         )
         files[f'{name}View.xaml.cs'] = VIEW_CODEBEHIND_TEMPLATE.format(
             namespace=namespace,
@@ -1957,6 +2003,14 @@ class PluginGeneratorApp(tk.Tk):
             text='Generate session notification hooks',
             variable=self.session_notifications_var,
         ).grid(row=5, column=0, columnspan=2, sticky='w', pady=4)
+
+        self.item_collection_var = tk.BooleanVar(value=False)
+        self.item_collection_checkbutton = tk.Checkbutton(
+            advanced_frame,
+            text='Generate starter item collection (basic display)',
+            variable=self.item_collection_var,
+        )
+        self.item_collection_checkbutton.grid(row=6, column=0, columnspan=2, sticky='w', pady=4)
         
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
@@ -2263,6 +2317,7 @@ class PluginGeneratorApp(tk.Tk):
         self.status_state_var.set(False)
         self.lifecycle_hooks_var.set(False)
         self.session_notifications_var.set(False)
+        self.item_collection_var.set(False)
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
@@ -2277,6 +2332,12 @@ class PluginGeneratorApp(tk.Tk):
                 checkbutton.config(state=tk.NORMAL)
         if hasattr(self, 'atlas_parameter_text'):
             self.atlas_parameter_text.config(state=tk.NORMAL if parameters_enabled else tk.DISABLED)
+        if hasattr(self, 'item_collection_checkbutton'):
+            if parameters_enabled:
+                self.item_collection_var.set(False)
+                self.item_collection_checkbutton.config(state=tk.DISABLED)
+            else:
+                self.item_collection_checkbutton.config(state=tk.NORMAL)
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output and library paths?'):
@@ -2330,6 +2391,7 @@ class PluginGeneratorApp(tk.Tk):
                 include_status_state=self.status_state_var.get(),
                 include_lifecycle_hooks=self.lifecycle_hooks_var.get(),
                 include_session_notifications=self.session_notifications_var.get(),
+                include_item_collection=self.item_collection_var.get(),
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,

@@ -213,6 +213,7 @@ class GenerationTests(unittest.TestCase):
         ).read_text(encoding='utf-8')
 
         self.assertIn('AddParameterContainer("vCar:Chassis")', viewmodel)
+        self.assertNotIn('public string Vcar', viewmodel)
 
     def test_basic_plugin_can_generate_status_state(self):
         target = self.generate(include_parameters=False, include_status_state=True)
@@ -238,8 +239,28 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('public override void OnCompositeSessionLoaded', viewmodel)
         self.assertIn('public override void OnCompositeSessionUnLoaded', viewmodel)
         self.assertIn('public override void OnCompositeSessionContainerChanged', viewmodel)
-        self.assertNotIn('public string Vcar', viewmodel)
 
+    def test_basic_plugin_can_generate_item_collection_and_view(self):
+        target = self.generate(include_parameters=False, include_item_collection=True)
+        project = target / 'SeparationPlugin'
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+        item_viewmodel = (project / 'ItemViewModel.cs').read_text(encoding='utf-8')
+        view_path = project / 'SeparationPluginView.xaml'
+        view = view_path.read_text(encoding='utf-8')
+
+        self.assertIn('ObservableCollection<ItemViewModel> Items', viewmodel)
+        self.assertIn('public sealed class ItemViewModel : BindableBase', item_viewmodel)
+        self.assertIn('ItemsSource="{Binding Items}"', view)
+        self.assertIn('Text="{Binding Name}"', view)
+        ET.parse(view_path)
+
+    def test_item_collection_rejects_data_behavior(self):
+        with self.assertRaisesRegex(ValueError, 'only available for basic displays'):
+            self.generate(
+                behavior=BEHAVIOR_CURRENT_VALUE,
+                library_project=str(LIBRARY_PROJECT),
+                include_item_collection=True,
+            )
     def test_generated_project_can_disable_deployment_during_validation(self):
         target = self.generate(include_parameters=False)
         project = (
