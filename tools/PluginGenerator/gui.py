@@ -882,7 +882,29 @@ BASIC_ITEM_COLLECTION_CONTENT = '''            <ItemsControl ItemsSource="{Bindi
 BASIC_LAYOUTS = ('text', 'form', 'list', 'table', 'blank')
 
 
-def build_basic_layout_content(layout, view_class, command_buttons):
+def build_property_control(spec):
+    label = html.escape(spec.get('display_name') or command_display_label(spec['name']), quote=True)
+    name = spec['name']
+    if spec['type'] == 'bool':
+        editor = f'<CheckBox IsChecked="{{Binding {name}}}" VerticalAlignment="Center" />'
+    else:
+        editor = (
+            f'<TextBox Text="{{Binding {name}, UpdateSourceTrigger=PropertyChanged}}" '
+            'MinWidth="180" />'
+        )
+    return (
+        '            <Grid Margin="0,4">\n'
+        '                <Grid.ColumnDefinitions>\n'
+        '                    <ColumnDefinition Width="Auto" />\n'
+        '                    <ColumnDefinition Width="*" />\n'
+        '                </Grid.ColumnDefinitions>\n'
+        f'                <TextBlock Text="{label}" Foreground="White" Margin="0,0,12,0" />\n'
+        f'                <ContentControl Grid.Column="1">{editor}</ContentControl>\n'
+        '            </Grid>\n'
+    )
+
+
+def build_basic_layout_content(layout, view_class, command_buttons, display_property_specs=None):
     if layout not in BASIC_LAYOUTS:
         raise ValueError(f'Unknown basic view layout: {layout}')
     commands = (
@@ -897,11 +919,10 @@ def build_basic_layout_content(layout, view_class, command_buttons):
     elif layout == 'table':
         body = '        <DataGrid ItemsSource="{Binding Items}" AutoGenerateColumns="True" Margin="4" />'
     elif layout == 'form':
-        body = (
-            '        <StackPanel Margin="12">\n'
-            '            <!-- Display property controls are inserted here when requested. -->\n'
-            '        </StackPanel>'
-        )
+        controls = ''.join(build_property_control(spec) for spec in (display_property_specs or []))
+        if not controls:
+            controls = '            <!-- Add display properties to generate controls. -->\n'
+        body = f'        <StackPanel Margin="12">\n{controls}        </StackPanel>'
     else:
         body = BASIC_PLACEHOLDER_CONTENT.format(view_class=view_class)
     return f'        <DockPanel>\n{commands}{body}\n        </DockPanel>'
@@ -1751,7 +1772,12 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             view_class=f'{name}View',
             current_value_text=(CURRENT_VALUE_TEXT if behavior == BEHAVIOR_CURRENT_AND_RANGE else ''),
             command_buttons=command_buttons,
-            basic_content=build_basic_layout_content(basic_layout, f'{name}View', command_buttons),
+            basic_content=build_basic_layout_content(
+                basic_layout,
+                f'{name}View',
+                command_buttons,
+                display_property_specs,
+            ),
         )
         files[f'{name}View.xaml.cs'] = VIEW_CODEBEHIND_TEMPLATE.format(
             namespace=namespace,

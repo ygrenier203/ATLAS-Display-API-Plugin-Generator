@@ -20,6 +20,7 @@ from tools.PluginGenerator.gui import (
     build_status_state,
     build_lifecycle_hooks,
     build_basic_layout_content,
+    build_property_control,
     build_session_notification_hooks,
     build_display_property,
     build_display_property_field,
@@ -173,10 +174,20 @@ class ParameterAndPropertyTests(unittest.TestCase):
 
     def test_basic_layouts_generate_expected_controls(self):
         self.assertIn('TextBlock', build_basic_layout_content('text', 'DemoView', ''))
-        self.assertIn('Display property controls', build_basic_layout_content('form', 'DemoView', ''))
+        self.assertIn('Add display properties', build_basic_layout_content('form', 'DemoView', ''))
         self.assertIn('ItemsControl', build_basic_layout_content('list', 'DemoView', ''))
         self.assertIn('DataGrid', build_basic_layout_content('table', 'DemoView', ''))
         self.assertEqual('', build_basic_layout_content('blank', 'DemoView', ''))
+
+    def test_property_controls_match_property_types(self):
+        boolean = build_display_property_spec('Enabled', property_type='bool', default_value='true')
+        number = build_display_property_spec('Threshold', property_type='double', default_value='1.5')
+
+        self.assertIn('CheckBox IsChecked="{Binding Enabled}"', build_property_control(boolean))
+        self.assertIn(
+            'TextBox Text="{Binding Threshold, UpdateSourceTrigger=PropertyChanged}"',
+            build_property_control(number),
+        )
 
 
 class GenerationTests(unittest.TestCase):
@@ -278,6 +289,24 @@ class GenerationTests(unittest.TestCase):
 
         self.assertIn('ObservableCollection<ItemViewModel> Items', viewmodel)
         self.assertIn('DataGrid ItemsSource="{Binding Items}"', view)
+
+    def test_form_layout_generates_display_property_controls(self):
+        properties = [
+            build_display_property_spec('Title', display_name='Panel Title'),
+            build_display_property_spec('Enabled', property_type='bool', default_value='true'),
+        ]
+        target = self.generate(
+            include_parameters=False,
+            basic_layout='form',
+            display_property_specs=properties,
+        )
+        view_path = target / 'SeparationPlugin' / 'SeparationPluginView.xaml'
+        view = view_path.read_text(encoding='utf-8')
+
+        self.assertIn('Text="Panel Title"', view)
+        self.assertIn('Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}"', view)
+        self.assertIn('IsChecked="{Binding Enabled}"', view)
+        ET.parse(view_path)
     def test_generated_project_can_disable_deployment_during_validation(self):
         target = self.generate(include_parameters=False)
         project = (
