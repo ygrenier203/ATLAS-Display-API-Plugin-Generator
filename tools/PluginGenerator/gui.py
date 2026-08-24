@@ -834,11 +834,7 @@ using System.Runtime.InteropServices;
 BASIC_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
              x:Class="{namespace}.{view_class}">
     <Grid>
-        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="4">
-{command_buttons}            </StackPanel>
 {basic_content}
-        </StackPanel>
     </Grid>
 </UserControl>
 '''
@@ -882,6 +878,33 @@ BASIC_ITEM_COLLECTION_CONTENT = '''            <ItemsControl ItemsSource="{Bindi
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>'''
+
+BASIC_LAYOUTS = ('text', 'form', 'list', 'table', 'blank')
+
+
+def build_basic_layout_content(layout, view_class, command_buttons):
+    if layout not in BASIC_LAYOUTS:
+        raise ValueError(f'Unknown basic view layout: {layout}')
+    commands = (
+        '        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">\n'
+        f'{command_buttons}'
+        '        </StackPanel>\n'
+    ) if command_buttons else ''
+    if layout == 'blank':
+        return commands.rstrip()
+    if layout == 'list':
+        body = BASIC_ITEM_COLLECTION_CONTENT
+    elif layout == 'table':
+        body = '        <DataGrid ItemsSource="{Binding Items}" AutoGenerateColumns="True" Margin="4" />'
+    elif layout == 'form':
+        body = (
+            '        <StackPanel Margin="12">\n'
+            '            <!-- Display property controls are inserted here when requested. -->\n'
+            '        </StackPanel>'
+        )
+    else:
+        body = BASIC_PLACEHOLDER_CONTENT.format(view_class=view_class)
+    return f'        <DockPanel>\n{commands}{body}\n        </DockPanel>'
 
 COMPARE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
              x:Class="{namespace}.{view_class}">
@@ -1515,7 +1538,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     display_property_specs=None, command_specs=None, parameter_max_count=100, workspace_root=None,
                     description=None, library_project=None, icon_path=None, service_names=None,
                     include_status_state=False, include_lifecycle_hooks=False,
-                    include_session_notifications=False, include_item_collection=False):
+                    include_session_notifications=False, include_item_collection=False,
+                    basic_layout='text'):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -1535,6 +1559,13 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError('ATLAS parameters require a data behavior.')
     if include_item_collection and behavior != BEHAVIOR_BASIC:
         raise ValueError('The starter item collection is only available for basic displays.')
+    if basic_layout not in BASIC_LAYOUTS:
+        raise ValueError(f'Unknown basic view layout: {basic_layout}')
+    if behavior != BEHAVIOR_BASIC and basic_layout != 'text':
+        raise ValueError('View layout selection is only available for basic displays.')
+    if include_item_collection and basic_layout == 'text':
+        basic_layout = 'list'
+    include_item_collection = include_item_collection or basic_layout in ('list', 'table')
     if len(atlas_parameters) > parameter_max_count:
         raise ValueError('Maximum parameter count cannot be lower than the number of ATLAS parameters.')
     namespace = name
@@ -1720,11 +1751,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             view_class=f'{name}View',
             current_value_text=(CURRENT_VALUE_TEXT if behavior == BEHAVIOR_CURRENT_AND_RANGE else ''),
             command_buttons=command_buttons,
-            basic_content=(
-                BASIC_ITEM_COLLECTION_CONTENT
-                if include_item_collection
-                else BASIC_PLACEHOLDER_CONTENT.format(view_class=f'{name}View')
-            ),
+            basic_content=build_basic_layout_content(basic_layout, f'{name}View', command_buttons),
         )
         files[f'{name}View.xaml.cs'] = VIEW_CODEBEHIND_TEMPLATE.format(
             namespace=namespace,
@@ -1855,6 +1882,16 @@ class PluginGeneratorApp(tk.Tk):
             text='Choose cursor values, visible-range samples, both, compare sessions, or a basic display.',
             font=('Arial', 8, 'italic'), justify='left', wraplength=600,
         ).pack(anchor='w', pady=(0, 4))
+
+        tk.Label(config_frame, text='Basic display layout:').pack(anchor='w', pady=(8, 4))
+        self.basic_layout_var = tk.StringVar(value='text')
+        self.basic_layout_combo = ttk.Combobox(
+            config_frame,
+            textvariable=self.basic_layout_var,
+            values=BASIC_LAYOUTS,
+            state='disabled',
+        )
+        self.basic_layout_combo.pack(fill=tk.X, pady=(0, 4))
         
         self.add_view_var = tk.BooleanVar(value=True)
         tk.Checkbutton(config_frame, text='Include simple WPF View', variable=self.add_view_var).pack(anchor='w', pady=4)
@@ -2309,6 +2346,7 @@ class PluginGeneratorApp(tk.Tk):
         self.parameter_max_var.set('100')
         self.add_view_var.set(True)
         self.behavior_var.set(BEHAVIOR_CURRENT_VALUE)
+        self.basic_layout_var.set('text')
         for service_var in self.service_vars.values():
             service_var.set(False)
         self.update_behavior_states()
@@ -2338,6 +2376,10 @@ class PluginGeneratorApp(tk.Tk):
                 self.item_collection_checkbutton.config(state=tk.DISABLED)
             else:
                 self.item_collection_checkbutton.config(state=tk.NORMAL)
+        if hasattr(self, 'basic_layout_combo'):
+            self.basic_layout_combo.config(state='readonly' if not parameters_enabled else 'disabled')
+            if parameters_enabled:
+                self.basic_layout_var.set('text')
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output and library paths?'):
@@ -2392,6 +2434,7 @@ class PluginGeneratorApp(tk.Tk):
                 include_lifecycle_hooks=self.lifecycle_hooks_var.get(),
                 include_session_notifications=self.session_notifications_var.get(),
                 include_item_collection=self.item_collection_var.get(),
+                basic_layout=self.basic_layout_var.get(),
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,

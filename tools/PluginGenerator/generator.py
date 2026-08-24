@@ -34,6 +34,7 @@ def run(args=None):
 	parser.add_argument('--lifecycle-hooks', action='store_true', help='generate initialization, visibility, and cleanup overrides')
 	parser.add_argument('--session-notifications', action='store_true', help='generate session loaded, unloaded, and set-change overrides')
 	parser.add_argument('--item-collection', action='store_true', help='generate a starter Items collection for a basic display')
+	parser.add_argument('--layout', choices=('text', 'form', 'list', 'table', 'blank'), default='text', help='starter view layout for a basic display')
 	parser.add_argument('--clear-settings', action='store_true', help='clear persisted paths used by the generator and exit')
 	options = parser.parse_args(args)
 
@@ -84,6 +85,8 @@ def run(args=None):
 		parser.error('--atlas-parameter requires a data behavior.')
 	if options.item_collection and behavior != BEHAVIOR_BASIC:
 		parser.error('--item-collection requires --behavior basic.')
+	if options.layout != 'text' and behavior != BEHAVIOR_BASIC:
+		parser.error('--layout requires --behavior basic.')
 	if not icon_path:
 		parser.error('--icon is required on first use. Choose the PNG icon for the plugin.')
 	command_specs = []
@@ -107,6 +110,7 @@ def run(args=None):
 		include_lifecycle_hooks=options.lifecycle_hooks,
 		include_session_notifications=options.session_notifications,
 		include_item_collection=options.item_collection,
+		basic_layout=options.layout,
 		parameter_max_count=options.max_parameters,
 		workspace_root=default_workspace_root(),
 		library_project=library_project,

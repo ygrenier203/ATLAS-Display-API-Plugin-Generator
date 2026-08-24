@@ -19,6 +19,7 @@ from tools.PluginGenerator.gui import (
     build_command_spec,
     build_status_state,
     build_lifecycle_hooks,
+    build_basic_layout_content,
     build_session_notification_hooks,
     build_display_property,
     build_display_property_field,
@@ -170,6 +171,13 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('base.OnCompositeSessionUnLoaded(args);', source)
         self.assertIn('base.OnCompositeSessionContainerChanged();', source)
 
+    def test_basic_layouts_generate_expected_controls(self):
+        self.assertIn('TextBlock', build_basic_layout_content('text', 'DemoView', ''))
+        self.assertIn('Display property controls', build_basic_layout_content('form', 'DemoView', ''))
+        self.assertIn('ItemsControl', build_basic_layout_content('list', 'DemoView', ''))
+        self.assertIn('DataGrid', build_basic_layout_content('table', 'DemoView', ''))
+        self.assertEqual('', build_basic_layout_content('blank', 'DemoView', ''))
+
 
 class GenerationTests(unittest.TestCase):
     def generate(self, **options):
@@ -261,6 +269,15 @@ class GenerationTests(unittest.TestCase):
                 library_project=str(LIBRARY_PROJECT),
                 include_item_collection=True,
             )
+
+    def test_table_layout_generates_collection_and_datagrid(self):
+        target = self.generate(include_parameters=False, basic_layout='table')
+        project = target / 'SeparationPlugin'
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+        view = (project / 'SeparationPluginView.xaml').read_text(encoding='utf-8')
+
+        self.assertIn('ObservableCollection<ItemViewModel> Items', viewmodel)
+        self.assertIn('DataGrid ItemsSource="{Binding Items}"', view)
     def test_generated_project_can_disable_deployment_during_validation(self):
         target = self.generate(include_parameters=False)
         project = (
