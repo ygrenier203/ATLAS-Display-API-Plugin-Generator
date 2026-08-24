@@ -85,6 +85,8 @@ Before writing any plugin files, the GUI displays a **Generation Preview** with 
 
 Graph generation uses reusable native WPF `DrawingContext` templates derived from the repository's `VisualLayer` approach. It does not require an external chart package.
 
+Visible-range and combined cursor/range plugins can select the `time-series` graph. It draws every configured ATLAS parameter as a separate colored trace and places live minimum, maximum, sample count, and optional cursor values in a side panel. Use `--graph time-series` from the CLI.
+
 Basic displays can choose a starter **View layout**: `text`, `form`, `list`, `table`, or `blank`. List and table layouts automatically generate the starter item collection required by their bindings. Use `--behavior basic --layout table` from the CLI.
 
 The basic `form` layout automatically creates a labeled WPF editor for every configured display property. Boolean properties use checkboxes; strings, integers, and numbers use text boxes with immediate binding updates.

@@ -167,7 +167,7 @@ def build_generation_summary(name, behavior, include_view, atlas_parameters, dis
                              command_specs, service_names, basic_layout='text', include_status_state=False,
                              include_lifecycle_hooks=False, include_session_notifications=False,
                              include_item_collection=False, collection_name='Items',
-                             item_class_name='ItemViewModel', item_field_specs=None, dll_specs=None):
+                             item_class_name='ItemViewModel', item_field_specs=None, graph_type='none', dll_specs=None):
     plugin_name = normalize_plugin_name(name)
     files = [
         f'{plugin_name}.sln',
@@ -207,6 +207,8 @@ def build_generation_summary(name, behavior, include_view, atlas_parameters, dis
     if uses_collection:
         fields = ', '.join(f'{spec["name"]}:{spec["type"]}' for spec in (item_field_specs or [])) or 'Name:string'
         features.append(f'collection {collection_name}<{item_class_name}> ({fields})')
+    if graph_type != 'none':
+        features.append(f'{graph_type} graph')
 
     lines = [
         f'Plugin: {plugin_name}',
@@ -1180,6 +1182,42 @@ TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
 </UserControl>
 '''
 
+TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
+             xmlns:displayPluginLibrary="clr-namespace:DisplayPluginLibrary;assembly=DisplayPluginLibrary"
+             x:Class="{namespace}.{view_class}">
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+{command_buttons}        </StackPanel>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3*" />
+                <ColumnDefinition Width="240" />
+            </Grid.ColumnDefinitions>
+            <Border Margin="6" BorderBrush="DimGray" BorderThickness="1">
+                <displayPluginLibrary:VisualLayer x:Name="GraphVisualLayer" />
+            </Border>
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{{Binding Series}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="DimGray" BorderThickness="0,0,0,1" Padding="8">
+                                <StackPanel>
+                                    <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
+{current_value_text}
+                                    <TextBlock Text="{{Binding Minimum, StringFormat='Minimum: {{0:F3}}'}}" Foreground="White" />
+                                    <TextBlock Text="{{Binding Maximum, StringFormat='Maximum: {{0:F3}}'}}" Foreground="White" />
+                                    <TextBlock Text="{{Binding SampleCount, StringFormat='Samples: {{0}}'}}" Foreground="White" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</UserControl>
+'''
+
 BASIC_PLACEHOLDER_CONTENT = '''            <TextBlock Text="{view_class}"
                    VerticalAlignment="Center"
                    HorizontalAlignment="Center"
@@ -1810,6 +1848,103 @@ def build_status_state():
 '''
     return fields, properties
 
+GRAPH_VIEW_CODEBEHIND_TEMPLATE = '''using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.ComponentModel;
+using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public partial class {view_class} : UserControl
+    {{
+        private static readonly Color[] Palette =
+        {{
+            Colors.DeepSkyBlue, Colors.Orange, Colors.LimeGreen, Colors.Magenta,
+            Colors.Gold, Colors.Cyan, Colors.Red, Colors.MediumPurple,
+        }};
+        private readonly GraphRenderer graphRenderer = new GraphRenderer();
+        private {viewmodel_class} viewModel;
+
+        public {view_class}()
+        {{
+            this.InitializeComponent();
+            this.DataContextChanged += this.OnDataContextChanged;
+            this.SizeChanged += (sender, args) => this.Redraw();
+        }}
+
+        private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs args)
+        {{
+            this.Detach();
+            this.viewModel = args.NewValue as {viewmodel_class};
+            if (this.viewModel != null)
+            {{
+                this.viewModel.Series.CollectionChanged += this.OnSeriesCollectionChanged;
+                this.AttachSeries();
+            }}
+
+            this.Redraw();
+        }}
+
+        private void OnSeriesCollectionChanged(object sender, NotifyCollectionChangedEventArgs args)
+        {{
+            this.AttachSeries();
+            this.Redraw();
+        }}
+
+        private void AttachSeries()
+        {{
+            if (this.viewModel == null)
+            {{
+                return;
+            }}
+
+            foreach (var item in this.viewModel.Series)
+            {{
+                item.PropertyChanged -= this.OnSeriesPropertyChanged;
+                item.PropertyChanged += this.OnSeriesPropertyChanged;
+            }}
+        }}
+
+        private void OnSeriesPropertyChanged(object sender, PropertyChangedEventArgs args)
+        {{
+            if (args.PropertyName == nameof(TimebaseSeriesViewModel.Values) ||
+                args.PropertyName == nameof(TimebaseSeriesViewModel.Timestamps))
+            {{
+                this.Redraw();
+            }}
+        }}
+
+        private void Detach()
+        {{
+            if (this.viewModel == null)
+            {{
+                return;
+            }}
+
+            this.viewModel.Series.CollectionChanged -= this.OnSeriesCollectionChanged;
+            foreach (var item in this.viewModel.Series)
+            {{
+                item.PropertyChanged -= this.OnSeriesPropertyChanged;
+            }}
+        }}
+
+        private void Redraw()
+        {{
+            var visual = this.GraphVisualLayer.Visual;
+            var series = this.viewModel?.Series.Select((item, index) => new GraphSeries(
+                item.Name,
+                item.Timestamps,
+                item.Values,
+                Palette[index % Palette.Length])).ToList() ?? new List<GraphSeries>();
+            visual.Draw(context => this.graphRenderer.Draw(context, visual.Extents, series));
+        }}
+    }}
+}}
+'''
+
 
 def build_item_field_spec(value):
     parts = [part.strip() for part in str(value or '').split(':', 1)]
@@ -1908,7 +2043,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     include_status_state=False, include_lifecycle_hooks=False,
                     include_session_notifications=False, include_item_collection=False,
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
-                    item_field_specs=None, dll_specs=None, atlas_install_directory=None):
+                    item_field_specs=None, graph_type='none', dll_specs=None, atlas_install_directory=None):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -1933,6 +2068,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError(f'Unknown basic view layout: {basic_layout}')
     if behavior != BEHAVIOR_BASIC and basic_layout != 'text':
         raise ValueError('View layout selection is only available for basic displays.')
+    if graph_type not in ('none', 'time-series'):
+        raise ValueError(f'Unknown graph type: {graph_type}')
+    if graph_type != 'none' and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
+        raise ValueError('Time-series graphs require a visible-range behavior.')
     if include_item_collection and basic_layout == 'text':
         basic_layout = 'list'
     include_item_collection = include_item_collection or basic_layout in ('list', 'table')
@@ -2027,7 +2166,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         view_template = VIEW_XAML_TEMPLATE
     elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         viewmodel_template = TIMEBASE_VIEWMODEL_TEMPLATE
-        view_template = TIMEBASE_VIEW_XAML_TEMPLATE
+        view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if graph_type == 'time-series' else TIMEBASE_VIEW_XAML_TEMPLATE
     elif behavior == BEHAVIOR_COMPARE_SESSIONS:
         viewmodel_template = COMPARE_VIEWMODEL_TEMPLATE
         view_template = COMPARE_VIEW_XAML_TEMPLATE
@@ -2138,6 +2277,9 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             current_value_property=CURRENT_VALUE_PROPERTY if include_current_value else '',
             current_value_update_method=CURRENT_VALUE_UPDATE_METHOD if include_current_value else '',
         )
+        if graph_type == 'time-series':
+            files['GraphSeries.cs'] = GRAPH_SERIES_TEMPLATE.format(namespace=namespace)
+            files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
     elif behavior == BEHAVIOR_COMPARE_SESSIONS:
         files['CompareRowViewModel.cs'] = COMPARE_ROW_VIEWMODEL_TEMPLATE.format(namespace=namespace)
         files['CompareSessionValueViewModel.cs'] = COMPARE_SESSION_VALUE_VIEWMODEL_TEMPLATE.format(
@@ -2164,9 +2306,11 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 item_field_specs[0]['name'],
             ),
         )
-        files[f'{name}View.xaml.cs'] = VIEW_CODEBEHIND_TEMPLATE.format(
+        codebehind_template = GRAPH_VIEW_CODEBEHIND_TEMPLATE if graph_type == 'time-series' else VIEW_CODEBEHIND_TEMPLATE
+        files[f'{name}View.xaml.cs'] = codebehind_template.format(
             namespace=namespace,
             view_class=f'{name}View',
+            viewmodel_class=f'{name}ViewModel',
         )
 
     for filename, content in files.items():
@@ -2516,6 +2660,17 @@ class PluginGeneratorApp(tk.Tk):
         self.item_fields_var = tk.StringVar(value='Name:string')
         self.item_fields_entry = tk.Entry(advanced_frame, textvariable=self.item_fields_var, width=36)
         self.item_fields_entry.grid(row=9, column=1, sticky='ew', padx=8)
+
+        tk.Label(advanced_frame, text='Graph:').grid(row=10, column=0, sticky='w', pady=4)
+        self.graph_type_var = tk.StringVar(value='none')
+        self.graph_type_combo = ttk.Combobox(
+            advanced_frame,
+            textvariable=self.graph_type_var,
+            values=('none', 'time-series'),
+            state='disabled',
+            width=22,
+        )
+        self.graph_type_combo.grid(row=10, column=1, sticky='w', padx=8)
         
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
@@ -3016,6 +3171,7 @@ class PluginGeneratorApp(tk.Tk):
         self.collection_name_var.set('Items')
         self.item_class_name_var.set('ItemViewModel')
         self.item_fields_var.set('Name:string')
+        self.graph_type_var.set('none')
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
@@ -3043,6 +3199,11 @@ class PluginGeneratorApp(tk.Tk):
         for widget_name in ('collection_name_entry', 'item_class_name_entry', 'item_fields_entry'):
             if hasattr(self, widget_name):
                 getattr(self, widget_name).config(state=tk.NORMAL if not parameters_enabled else tk.DISABLED)
+        if hasattr(self, 'graph_type_combo'):
+            graph_enabled = self.behavior_var.get() in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE)
+            self.graph_type_combo.config(state='readonly' if graph_enabled else 'disabled')
+            if not graph_enabled:
+                self.graph_type_var.set('none')
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output, library, icon, and ATLAS paths?'):
@@ -3073,6 +3234,7 @@ class PluginGeneratorApp(tk.Tk):
             'collection_name': self.collection_name_var.get(),
             'item_class_name': self.item_class_name_var.get(),
             'item_fields': self.item_fields_var.get(),
+            'graph_type': self.graph_type_var.get(),
         }
 
     def apply_preset_configuration(self, configuration):
@@ -3100,6 +3262,7 @@ class PluginGeneratorApp(tk.Tk):
         self.collection_name_var.set(configuration.get('collection_name', 'Items'))
         self.item_class_name_var.set(configuration.get('item_class_name', 'ItemViewModel'))
         self.item_fields_var.set(configuration.get('item_fields', 'Name:string'))
+        self.graph_type_var.set(configuration.get('graph_type', 'none'))
         self.update_behavior_states()
 
     def save_preset_dialog(self):
@@ -3174,6 +3337,7 @@ class PluginGeneratorApp(tk.Tk):
                 collection_name=self.collection_name_var.get().strip(),
                 item_class_name=self.item_class_name_var.get().strip(),
                 item_field_specs=item_field_specs,
+                graph_type=self.graph_type_var.get(),
                 dll_specs=self.dll_specs,
             )
             if not messagebox.askokcancel('Generation Preview', summary):
@@ -3196,6 +3360,7 @@ class PluginGeneratorApp(tk.Tk):
                 collection_name=self.collection_name_var.get().strip(),
                 item_class_name=self.item_class_name_var.get().strip(),
                 item_field_specs=item_field_specs,
+                graph_type=self.graph_type_var.get(),
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,

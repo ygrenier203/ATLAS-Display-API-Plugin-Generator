@@ -40,6 +40,7 @@ def run(args=None):
 	parser.add_argument('--collection-name', default='Items', help='starter collection property name')
 	parser.add_argument('--item-class', default='ItemViewModel', help='starter collection item class name')
 	parser.add_argument('--item-field', action='append', default=[], help='item field as Name:type; repeat for multiple fields')
+	parser.add_argument('--graph', choices=('none', 'time-series'), default='none', help='graph renderer for visible-range data')
 	parser.add_argument('--clear-settings', action='store_true', help='clear persisted paths used by the generator and exit')
 	options = parser.parse_args(args)
 
@@ -95,6 +96,8 @@ def run(args=None):
 		parser.error('--item-collection requires --behavior basic.')
 	if options.layout != 'text' and behavior != BEHAVIOR_BASIC:
 		parser.error('--layout requires --behavior basic.')
+	if options.graph != 'none' and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
+		parser.error('--graph requires a visible-range behavior.')
 	if not icon_path:
 		parser.error('--icon is required on first use. Choose the PNG icon for the plugin.')
 	command_specs = []
@@ -135,6 +138,7 @@ def run(args=None):
 		collection_name=options.collection_name,
 		item_class_name=options.item_class,
 		item_field_specs=item_field_specs or None,
+		graph_type=options.graph,
 		parameter_max_count=options.max_parameters,
 		workspace_root=default_workspace_root(),
 		library_project=library_project,

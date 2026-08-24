@@ -467,6 +467,31 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('ObservableCollection<ItemViewModel> Items', viewmodel)
         self.assertIn('DataGrid ItemsSource="{Binding Items}"', view)
 
+    def test_visible_range_plugin_can_generate_multi_series_time_graph(self):
+        target = self.generate(
+            behavior=BEHAVIOR_CURRENT_AND_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            atlas_parameters=['vCar:Chassis', 'rThrottlePedal:Chassis'],
+            graph_type='time-series',
+        )
+        project = target / 'SeparationPlugin'
+        view_path = project / 'SeparationPluginView.xaml'
+        view = view_path.read_text(encoding='utf-8')
+        codebehind = (project / 'SeparationPluginView.xaml.cs').read_text(encoding='utf-8')
+
+        self.assertTrue((project / 'GraphSeries.cs').exists())
+        self.assertTrue((project / 'GraphRenderer.cs').exists())
+        self.assertIn('VisualLayer x:Name="GraphVisualLayer"', view)
+        self.assertIn('ItemsSource="{Binding Series}"', view)
+        self.assertIn('new GraphSeries(', codebehind)
+        self.assertIn('item.Timestamps', codebehind)
+        self.assertIn('item.Values', codebehind)
+        ET.parse(view_path)
+
+    def test_time_graph_requires_visible_range_behavior(self):
+        with self.assertRaisesRegex(ValueError, 'require a visible-range behavior'):
+            self.generate(include_parameters=False, graph_type='time-series')
+
     def test_collection_names_and_item_fields_are_configurable(self):
         target = self.generate(
             include_parameters=False,
