@@ -23,6 +23,7 @@ def run(args=None):
 		help='ATLAS parameter identifier to add; repeat for multiple parameters',
 	)
 	parser.add_argument('--max-parameters', type=int, default=100, help='maximum number of display parameters')
+	parser.add_argument('--build', action='store_true', help='build and validate the generated solution without deploying it')
 	parser.add_argument('--clear-settings', action='store_true', help='clear persisted paths used by the generator and exit')
 	options = parser.parse_args(args)
 
@@ -32,6 +33,7 @@ def run(args=None):
 		BEHAVIOR_CURRENT_AND_RANGE,
 		BEHAVIOR_CURRENT_VALUE,
 		BEHAVIOR_VISIBLE_RANGE,
+		build_generated_plugin,
 		clear_settings,
 		default_output_folder,
 		default_workspace_root,
@@ -88,6 +90,9 @@ def run(args=None):
 		'library_project': library_project,
 		'icon_path': icon_path,
 	})
+	if options.build:
+		build_generated_plugin(target)
+		print('Build validation succeeded.')
 	print(f'Plugin created at: {target}')
 
 

@@ -5,6 +5,7 @@ import math
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import shutil
+import subprocess
 import uuid
 
 
@@ -17,6 +18,7 @@ CS_PROJ_TEMPLATE = r'''<Project Sdk="Microsoft.NET.Sdk">
     <UseWPF>true</UseWPF>
     <Platforms>x64</Platforms>
     <ProjectGuid>{{{project_guid}}}</ProjectGuid>
+    <DeployAtlasPlugin Condition="'$(DeployAtlasPlugin)' == ''">true</DeployAtlasPlugin>
   </PropertyGroup>
   <ItemGroup>
         <Resource Include="Resources\{icon_filename}" />
@@ -28,7 +30,7 @@ CS_PROJ_TEMPLATE = r'''<Project Sdk="Microsoft.NET.Sdk">
     <PackageReference Include="MAT.OCS.Core" Version="*" />
     <PackageReference Include="System.Reactive" Version="4.4.1" />
   </ItemGroup>
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(DeployAtlasPlugin)' == 'true'">
     <Exec Command="python &quot;$(SolutionDir)scripts\deploy.py&quot; &quot;$(TargetDir)$(ProjectName).dll&quot;" />
   </Target>
 </Project>
@@ -1202,6 +1204,88 @@ def validate_icon_path(icon_path):
     return icon_path
 
 
+def find_build_tool():
+    dotnet_candidates = [
+        shutil.which('dotnet'),
+        os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Microsoft', 'dotnet', 'dotnet.exe'),
+    ]
+    for candidate in dotnet_candidates:
+        if candidate and os.path.isfile(candidate):
+            result = subprocess.run(
+                [candidate, '--list-sdks'],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return 'dotnet', candidate
+
+    msbuild_candidates = [
+        shutil.which('msbuild'),
+        os.path.join(
+            os.environ.get('ProgramFiles(x86)', ''),
+            'Microsoft Visual Studio', '2022', 'BuildTools', 'MSBuild', 'Current', 'Bin', 'MSBuild.exe',
+        ),
+    ]
+    for candidate in msbuild_candidates:
+        if candidate and os.path.isfile(candidate):
+            return 'msbuild', candidate
+    return None
+
+
+def build_generated_plugin(target, build_tool=None):
+    target = os.path.abspath(target)
+    plugin_name = os.path.basename(target)
+    solution_path = os.path.join(target, f'{plugin_name}.sln')
+    if not os.path.isfile(solution_path):
+        raise FileNotFoundError(f'Generated solution not found: {solution_path}')
+
+    tool = build_tool or find_build_tool()
+    if not tool:
+        raise RuntimeError('No .NET SDK or MSBuild installation was found. Install the .NET 8 SDK to build plugins.')
+
+    tool_kind, executable = tool
+    if tool_kind == 'dotnet':
+        command = [
+            executable,
+            'build',
+            solution_path,
+            '--configuration',
+            'Debug',
+            '-p:Platform=x64',
+            '-p:DeployAtlasPlugin=false',
+        ]
+    elif tool_kind == 'msbuild':
+        command = [
+            executable,
+            solution_path,
+            '-restore',
+            '-p:Configuration=Debug',
+            '-p:Platform=x64',
+            '-p:DeployAtlasPlugin=false',
+        ]
+    else:
+        raise ValueError(f'Unknown build tool: {tool_kind}')
+
+    environment = os.environ.copy()
+    environment['DOTNET_CLI_TELEMETRY_OPTOUT'] = '1'
+    environment['DOTNET_SKIP_FIRST_TIME_EXPERIENCE'] = '1'
+    result = subprocess.run(
+        command,
+        cwd=target,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        output = '\n'.join(filter(None, [result.stdout.strip(), result.stderr.strip()]))
+        output_lines = output.splitlines()
+        summary = '\n'.join(output_lines[-40:])
+        raise RuntimeError(f'Generated plugin build failed:\n\n{summary}')
+    return result.stdout
+
+
 def generate_plugin(name, base_out, include_view=True, include_parameters=True, behavior=None, atlas_parameters=None,
                     display_property_specs=None, parameter_max_count=100, workspace_root=None,
                     description=None, library_project=None, icon_path=None, service_names=None):
@@ -1601,6 +1685,13 @@ class PluginGeneratorApp(tk.Tk):
         
         self.open_folder_var = tk.BooleanVar(value=True)
         tk.Checkbutton(advanced_frame, text='Open folder after generation', variable=self.open_folder_var).grid(row=1, column=0, columnspan=2, sticky='w', pady=4)
+
+        self.build_after_generation_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            advanced_frame,
+            text='Build and validate after generation',
+            variable=self.build_after_generation_var,
+        ).grid(row=2, column=0, columnspan=2, sticky='w', pady=4)
         
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
@@ -1812,6 +1903,7 @@ class PluginGeneratorApp(tk.Tk):
             service_var.set(False)
         self.update_behavior_states()
         self.open_folder_var.set(True)
+        self.build_after_generation_var.set(True)
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
@@ -1887,9 +1979,17 @@ class PluginGeneratorApp(tk.Tk):
                 'icon_path': icon_path,
             })
 
+            build_succeeded = False
+            if self.build_after_generation_var.get():
+                self.update_idletasks()
+                build_generated_plugin(target)
+                build_succeeded = True
+
             # Show success message
             generated_name = os.path.basename(target)
             success_msg = f'Plugin "{generated_name}" created successfully at:\n{target}'
+            if build_succeeded:
+                success_msg += '\n\nBuild validation succeeded.'
             messagebox.showinfo('Success', success_msg)
             
             # Open folder if requested

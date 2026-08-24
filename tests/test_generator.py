@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from tools.PluginGenerator.gui import (
     BEHAVIOR_BASIC,
@@ -9,6 +10,7 @@ from tools.PluginGenerator.gui import (
     BEHAVIOR_CURRENT_VALUE,
     BEHAVIOR_VISIBLE_RANGE,
     behavior_uses_parameters,
+    build_generated_plugin,
     build_atlas_parameter,
     build_display_property,
     build_display_property_field,
@@ -134,6 +136,15 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('AddParameterContainer("vCar:Chassis")', viewmodel)
         self.assertNotIn('public string Vcar', viewmodel)
 
+    def test_generated_project_can_disable_deployment_during_validation(self):
+        target = self.generate(include_parameters=False)
+        project = (
+            target / 'SeparationPlugin' / 'SeparationPlugin.csproj'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('<DeployAtlasPlugin Condition=', project)
+        self.assertIn("Condition=\"'$(DeployAtlasPlugin)' == 'true'\"", project)
+
     def test_display_property_does_not_register_atlas_parameter(self):
         spec = build_display_property_spec('FontSize', persisted=True)
         target = self.generate(
@@ -248,6 +259,31 @@ class GenerationTests(unittest.TestCase):
         ).read_text(encoding='utf-8')
 
         self.assertIn('this.MakeDataRequests(true, true);', viewmodel)
+
+    @patch('tools.PluginGenerator.gui.subprocess.run')
+    def test_build_validation_uses_dotnet_without_deploying(self, run):
+        run.return_value.returncode = 0
+        run.return_value.stdout = 'Build succeeded.'
+        run.return_value.stderr = ''
+        target = self.generate(include_parameters=False)
+
+        output = build_generated_plugin(target, build_tool=('dotnet', 'dotnet.exe'))
+
+        self.assertEqual('Build succeeded.', output)
+        command = run.call_args.args[0]
+        self.assertEqual(['dotnet.exe', 'build'], command[:2])
+        self.assertIn('-p:Platform=x64', command)
+        self.assertIn('-p:DeployAtlasPlugin=false', command)
+
+    @patch('tools.PluginGenerator.gui.subprocess.run')
+    def test_build_validation_reports_compiler_output(self, run):
+        run.return_value.returncode = 1
+        run.return_value.stdout = 'Example.cs(10,5): error CS1002: ; expected'
+        run.return_value.stderr = ''
+        target = self.generate(include_parameters=False)
+
+        with self.assertRaisesRegex(RuntimeError, 'CS1002'):
+            build_generated_plugin(target, build_tool=('dotnet', 'dotnet.exe'))
 
 
 if __name__ == '__main__':
