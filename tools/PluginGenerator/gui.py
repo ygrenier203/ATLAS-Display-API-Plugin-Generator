@@ -132,7 +132,7 @@ using MAT.Atlas.Client.Presentation.Plugins;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Windows.Media;
-
+{extra_usings}
 namespace {namespace}
 {{
     [DisplayPluginSettings(ParametersMaxCount = {parameter_max_count})]
@@ -142,10 +142,10 @@ namespace {namespace}
         public {viewmodel_class}(
             ISignalBus signalBus,
             IDataRequestSignalFactory dataRequestSignalFactory,
-            ILogger logger) :
+            ILogger logger{extra_ctor_params}) :
             base(signalBus, dataRequestSignalFactory, logger)
         {{
-        }}
+{extra_ctor_assignments}        }}
 
 {custom_parameter_properties}
     {custom_parameter_setup}
@@ -154,7 +154,7 @@ namespace {namespace}
 }}
 '''
 
-BASIC_VIEWMODEL_TEMPLATE = '''using MAT.Atlas.Client.Presentation.Displays;
+BASIC_VIEWMODEL_TEMPLATE = '''{extra_usings}using MAT.Atlas.Client.Presentation.Displays;
 using MAT.Atlas.Client.Presentation.Plugins;
 
 namespace {namespace}
@@ -162,7 +162,7 @@ namespace {namespace}
     [DisplayPluginSettings(ParametersMaxCount = {parameter_max_count})]
     public sealed class {viewmodel_class} : DisplayPluginViewModel
     {{
-    }}
+{service_members}    }}
 }}
 '''
 
@@ -438,6 +438,50 @@ def build_parameter_property(spec):
     )
 
 
+# Factories/services registered with Autofac, injectable via the ViewModel constructor.
+# Namespaces/param names verified against Atlas.DisplayAPI.Examples usage.
+SERVICE_DEFINITIONS = {
+    'ISignalBus': {'namespace': 'MAT.Atlas.Api.Core.Signals', 'param': 'signalBus'},
+    'IDataRequestSignalFactory': {'namespace': 'MAT.Atlas.Client.Platform.Data', 'param': 'dataRequestSignalFactory'},
+    'ISessionService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionService'},
+    'ISessionSummaryService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionSummaryService'},
+    'ISessionCursorService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionCursorService'},
+}
+
+
+def build_service_entries(service_names):
+    return [
+        {'interface': name, 'namespace': SERVICE_DEFINITIONS[name]['namespace'], 'param': SERVICE_DEFINITIONS[name]['param']}
+        for name in service_names
+        if name in SERVICE_DEFINITIONS
+    ]
+
+
+def build_service_usings(entries):
+    namespaces = sorted({entry['namespace'] for entry in entries})
+    return ''.join(f'using {namespace};\n' for namespace in namespaces)
+
+
+def build_service_fields(entries):
+    return ''.join(f'        private readonly {entry["interface"]} {entry["param"]};\n' for entry in entries)
+
+
+def build_basic_service_members(viewmodel_class, entries):
+    if not entries:
+        return ''
+    fields = build_service_fields(entries)
+    params = ',\n'.join(f'            {entry["interface"]} {entry["param"]}' for entry in entries)
+    assignments = ''.join(f'            this.{entry["param"]} = {entry["param"]};\n' for entry in entries)
+    return (
+        f'{fields}\n'
+        f'        public {viewmodel_class}(\n'
+        f'{params})\n'
+        '        {\n'
+        f'{assignments}'
+        '        }\n'
+    )
+
+
 def validate_icon_path(icon_path):
     icon_path = os.path.abspath(icon_path or '')
     if not os.path.isfile(icon_path):
@@ -447,7 +491,7 @@ def validate_icon_path(icon_path):
     return icon_path
 
 
-def generate_plugin(name, base_out, include_view=True, include_parameters=True, parameter_specs=None, parameter_max_count=100, workspace_root=None, description=None, library_project=None, icon_path=None):
+def generate_plugin(name, base_out, include_view=True, include_parameters=True, parameter_specs=None, parameter_max_count=100, workspace_root=None, description=None, library_project=None, icon_path=None, service_names=None):
     name = normalize_plugin_name(name)
     if not isinstance(parameter_max_count, int) or parameter_max_count < 1:
         raise ValueError('Maximum parameter count must be a positive integer.')
@@ -531,6 +575,25 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         custom_parameter_fields = '\n'.join(build_parameter_field(spec) for spec in parameter_specs)
         custom_parameter_properties = '\n'.join(build_parameter_property(spec) for spec in parameter_specs)
 
+    # ISignalBus/IDataRequestSignalFactory are always injected by ParameterSampleDisplayViewModelBase.
+    requested_services = list(service_names or [])
+    if include_parameters:
+        extra_service_names = [n for n in requested_services if n not in ('ISignalBus', 'IDataRequestSignalFactory')]
+    else:
+        extra_service_names = requested_services
+    service_entries = build_service_entries(extra_service_names)
+    extra_usings = build_service_usings(service_entries)
+    extra_ctor_params = ''
+    extra_ctor_assignments = ''
+    service_members = ''
+    if include_parameters:
+        extra_service_fields = build_service_fields(service_entries)
+        custom_parameter_fields = '\n'.join(filter(None, [custom_parameter_fields, extra_service_fields]))
+        extra_ctor_params = ''.join(f',\n            {entry["interface"]} {entry["param"]}' for entry in service_entries)
+        extra_ctor_assignments = ''.join(f'            this.{entry["param"]} = {entry["param"]};\n' for entry in service_entries)
+    else:
+        service_members = build_basic_service_members(f'{name}ViewModel', service_entries)
+
     files = {
         f'{name}.csproj': csproj,
         os.path.join('Properties', 'AssemblyInfo.cs'): ASSEMBLY_INFO_TEMPLATE.format(
@@ -551,6 +614,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             custom_parameter_setup=parameter_setup,
             custom_parameter_fields=custom_parameter_fields,
             custom_parameter_properties=custom_parameter_properties,
+            extra_usings=extra_usings,
+            extra_ctor_params=extra_ctor_params,
+            extra_ctor_assignments=extra_ctor_assignments,
+            service_members=service_members,
             parameter_max_count=parameter_max_count,
         ),
     }
@@ -674,7 +741,25 @@ class PluginGeneratorApp(tk.Tk):
         
         self.add_parameters_var = tk.BooleanVar(value=True)
         tk.Checkbutton(config_frame, text='Include dynamic parameter support (uses ParameterSampleDisplayViewModelBase)', 
-                       variable=self.add_parameters_var).pack(anchor='w', pady=4)
+                       variable=self.add_parameters_var, command=self.update_service_checkbox_states).pack(anchor='w', pady=4)
+
+        # === Injected Services ===
+        services_frame = tk.LabelFrame(scrollable_frame, text='Injected Services', padx=8, pady=8)
+        services_frame.pack(fill=tk.X, pady=8)
+
+        tk.Label(
+            services_frame,
+            text='ISignalBus and IDataRequestSignalFactory are always injected when dynamic parameter support is enabled.',
+            font=('Arial', 8, 'italic'), justify='left', wraplength=600,
+        ).pack(anchor='w', pady=(0, 4))
+
+        self.service_vars = {service_name: tk.BooleanVar(value=False) for service_name in SERVICE_DEFINITIONS}
+        self.service_checkbuttons = {}
+        for service_name in SERVICE_DEFINITIONS:
+            checkbutton = tk.Checkbutton(services_frame, text=service_name, variable=self.service_vars[service_name])
+            checkbutton.pack(anchor='w')
+            self.service_checkbuttons[service_name] = checkbutton
+        self.update_service_checkbox_states()
         
         # === Custom Parameters ===
         param_frame = tk.LabelFrame(scrollable_frame, text='Custom Parameters', padx=8, pady=8)
@@ -888,8 +973,22 @@ class PluginGeneratorApp(tk.Tk):
         self.parameter_max_var.set('100')
         self.add_view_var.set(True)
         self.add_parameters_var.set(True)
+        for service_var in self.service_vars.values():
+            service_var.set(False)
+        self.update_service_checkbox_states()
         self.open_folder_var.set(True)
         messagebox.showinfo('Reset', 'Form has been reset to default values')
+
+    def update_service_checkbox_states(self):
+        # ISignalBus/IDataRequestSignalFactory are always injected by the parameter base class.
+        parameters_enabled = self.add_parameters_var.get()
+        for service_name in ('ISignalBus', 'IDataRequestSignalFactory'):
+            checkbutton = self.service_checkbuttons[service_name]
+            if parameters_enabled:
+                self.service_vars[service_name].set(True)
+                checkbutton.config(state=tk.DISABLED)
+            else:
+                checkbutton.config(state=tk.NORMAL)
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output and library paths?'):
@@ -920,6 +1019,7 @@ class PluginGeneratorApp(tk.Tk):
             parameter_max_count = int(self.parameter_max_var.get())
             if parameter_specs and not self.add_parameters_var.get():
                 raise ValueError('Enable dynamic parameter support to generate custom parameters.')
+            service_names = [name for name, var in self.service_vars.items() if var.get()]
             os.makedirs(base_out, exist_ok=True)
             target = generate_plugin(
                 name,
@@ -932,6 +1032,7 @@ class PluginGeneratorApp(tk.Tk):
                 description=self.description_var.get().strip() or None,
                 library_project=library_project,
                 icon_path=icon_path,
+                service_names=service_names,
             )
             save_settings({
                 'output_folder': base_out,

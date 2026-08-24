@@ -34,6 +34,8 @@ The plugin name is used as the C# namespace. In the GUI, use the Custom Paramete
 
 The GUI will prompt for a plugin name, description, and output folder. The plugin name must contain `Plugin` so ATLAS can discover the assembly. It creates a WPF class library with a `.sln`, `.csproj`, assembly metadata (title, description, and GUID), `PluginModule.cs`, a `ViewModel`, a `Properties/AssemblyInfo.cs` file, and an optional WPF `UserControl` view. The copied `Resources/icon.png` is explicitly included as a WPF resource and registered with the plugin.
 
+The **Injected Services** section lets you select which factories/services from the Display API are constructor-injected into the ViewModel: `ISignalBus`, `IDataRequestSignalFactory`, `ISessionService`, `ISessionSummaryService`, and `ISessionCursorService`. When dynamic parameter support is enabled, `ISignalBus` and `IDataRequestSignalFactory` are always injected via the `ParameterSampleDisplayViewModelBase` constructor, so those two checkboxes are shown pre-checked and disabled; any additional services you select are appended as extra constructor parameters. In a basic display (no dynamic parameter support), any selected services are injected directly into a generated constructor. `IDisplayParameterService` is not injectable; it is accessed via `this.ServiceContext.DisplayParameterService` and is already wired up automatically for parameter-enabled plugins.
+
 Generated projects currently target `net8.0-windows` and use `Atlas.DisplayAPI 11.4.4.371-W48`, which is the compatible package version available in this repository. The older ATLAS tutorial describes a .NET Framework WPF project; targeting `net48` requires ATLAS and `MAT.OCS.Core` package versions that provide .NET Framework assets.
 
 Notes:
