@@ -34,6 +34,8 @@ from tools.PluginGenerator.gui import (
     generate_plugin,
     load_preset,
     save_preset,
+    GRAPH_RENDERER_TEMPLATE,
+    GRAPH_SERIES_TEMPLATE,
 )
 from tools.PluginGenerator.generator import run
 
@@ -44,6 +46,16 @@ ICON = ROOT / 'icon.png'
 
 
 class ParameterAndPropertyTests(unittest.TestCase):
+    def test_graph_renderer_scaffold_uses_native_wpf_drawing(self):
+        renderer = GRAPH_RENDERER_TEMPLATE.format(namespace='DemoPlugin')
+        series = GRAPH_SERIES_TEMPLATE.format(namespace='DemoPlugin')
+
+        self.assertIn('DrawingContext drawingContext', renderer)
+        self.assertIn('drawingContext.DrawLine', renderer)
+        self.assertIn('double.IsNaN', renderer)
+        self.assertIn('IReadOnlyList<long> Timestamps', series)
+        self.assertIn('IReadOnlyList<double> Values', series)
+
     def test_deployed_plugin_discovery_excludes_built_in_plugins(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

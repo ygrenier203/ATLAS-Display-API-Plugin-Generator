@@ -997,6 +997,102 @@ namespace {namespace}
 }}
 '''
 
+GRAPH_SERIES_TEMPLATE = '''using System.Collections.Generic;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public sealed class GraphSeries
+    {{
+        public GraphSeries(string name, IReadOnlyList<long> timestamps, IReadOnlyList<double> values, Color color)
+        {{
+            this.Name = name;
+            this.Timestamps = timestamps;
+            this.Values = values;
+            this.Color = color;
+        }}
+
+        public string Name {{ get; }}
+
+        public IReadOnlyList<long> Timestamps {{ get; }}
+
+        public IReadOnlyList<double> Values {{ get; }}
+
+        public Color Color {{ get; }}
+    }}
+}}
+'''
+
+GRAPH_RENDERER_TEMPLATE = '''using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public sealed class GraphRenderer
+    {{
+        public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            drawingContext.DrawRectangle(Brushes.Transparent, new Pen(Brushes.DimGray, 1), new Rect(extents));
+            if (extents.Width <= 0 || extents.Height <= 0)
+            {{
+                return;
+            }}
+
+            var validSeries = series.Where(item => item.Timestamps.Count > 1 && item.Values.Count > 1).ToList();
+            if (validSeries.Count == 0)
+            {{
+                return;
+            }}
+
+            var start = validSeries.Min(item => item.Timestamps.First());
+            var end = validSeries.Max(item => item.Timestamps.Last());
+            var timeRange = Math.Max(1, end - start);
+            foreach (var item in validSeries)
+            {{
+                this.DrawSeries(drawingContext, extents, item, start, timeRange);
+            }}
+        }}
+
+        private void DrawSeries(DrawingContext drawingContext, Size extents, GraphSeries series, long start, long timeRange)
+        {{
+            var count = Math.Min(series.Timestamps.Count, series.Values.Count);
+            var finiteValues = series.Values.Take(count).Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToList();
+            if (finiteValues.Count < 2)
+            {{
+                return;
+            }}
+
+            var minimum = finiteValues.Min();
+            var valueRange = Math.Max(double.Epsilon, finiteValues.Max() - minimum);
+            var pen = new Pen(new SolidColorBrush(series.Color), 1.5);
+            Point? previous = null;
+            for (var index = 0; index < count; index++)
+            {{
+                var value = series.Values[index];
+                if (double.IsNaN(value) || double.IsInfinity(value))
+                {{
+                    previous = null;
+                    continue;
+                }}
+
+                var x = ((series.Timestamps[index] - start) / (double)timeRange) * extents.Width;
+                var y = extents.Height - (((value - minimum) / valueRange) * extents.Height);
+                var point = new Point(x, y);
+                if (previous.HasValue)
+                {{
+                    drawingContext.DrawLine(pen, previous.Value, point);
+                }}
+
+                previous = point;
+            }}
+        }}
+    }}
+}}
+'''
+
 VIEW_XAML_HEADER = '''<UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
