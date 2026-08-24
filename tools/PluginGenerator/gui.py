@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import math
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import shutil
@@ -952,7 +953,49 @@ def build_atlas_parameter(identifier, existing_identifiers=None):
     return identifier
 
 
-def build_display_property_spec(name, display_name='', category='', description='', order='', persisted=False, browsable=True, existing_names=None):
+DISPLAY_PROPERTY_TYPES = {
+    'String': 'string',
+    'Integer': 'int',
+    'Number': 'double',
+    'Boolean': 'bool',
+}
+
+
+def parse_display_property_default(property_type, default_value):
+    text = str(default_value or '').strip()
+    if property_type == 'string':
+        return text
+    if property_type == 'int':
+        if not text:
+            return 0
+        try:
+            return int(text)
+        except ValueError as error:
+            raise ValueError('Integer property default must be a whole number.') from error
+    if property_type == 'double':
+        if not text:
+            return 0.0
+        try:
+            value = float(text)
+        except ValueError as error:
+            raise ValueError('Number property default must be numeric.') from error
+        if not math.isfinite(value):
+            raise ValueError('Number property default must be finite.')
+        return value
+    if property_type == 'bool':
+        if not text:
+            return False
+        normalized = text.lower()
+        if normalized in ('true', 'yes', '1'):
+            return True
+        if normalized in ('false', 'no', '0'):
+            return False
+        raise ValueError('Boolean property default must be true or false.')
+    raise ValueError(f'Unsupported display property type: {property_type}')
+
+
+def build_display_property_spec(name, display_name='', category='', description='', order='', persisted=False,
+                                browsable=True, property_type='string', default_value='', existing_names=None):
     name = (name or '').strip()
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
         raise ValueError(f'Display property name "{name}" must be a valid C# identifier.')
@@ -961,6 +1004,9 @@ def build_display_property_spec(name, display_name='', category='', description=
     display_name = (display_name or '').strip()
     category = (category or '').strip()
     description = (description or '').strip()
+    if property_type not in DISPLAY_PROPERTY_TYPES.values():
+        raise ValueError(f'Unsupported display property type: {property_type}')
+    parsed_default = parse_display_property_default(property_type, default_value)
     order_text = str(order).strip()
     if not order_text:
         order_value = None
@@ -976,6 +1022,8 @@ def build_display_property_spec(name, display_name='', category='', description=
         'order': order_value,
         'persisted': bool(persisted),
         'browsable': bool(browsable),
+        'type': property_type,
+        'default': parsed_default,
     }
 
 
@@ -985,15 +1033,28 @@ def escape_csharp_string(value):
 
 def build_display_property_field(spec):
     field = '_' + to_camel_case(spec['name'])
-    return f'        private string {field};'
+    return f'        private {spec["type"]} {field} = {display_property_default_literal(spec)};'
+
+
+def display_property_default_literal(spec):
+    value = spec['default']
+    if spec['type'] == 'string':
+        return f'"{escape_csharp_string(value)}"'
+    if spec['type'] == 'int':
+        return str(value)
+    if spec['type'] == 'double':
+        return f'{format(value, ".15g")}d'
+    if spec['type'] == 'bool':
+        return 'true' if value else 'false'
+    raise ValueError(f'Unsupported display property type: {spec["type"]}')
 
 
 def build_display_property(spec):
     field = '_' + to_camel_case(spec['name'])
-    default_value = escape_csharp_string(spec['name'])
+    default_value = display_property_default_literal(spec)
     if spec['persisted']:
         accessor = (
-            f'            get => this.{field} = this.ReadProperty("{default_value}");\n'
+            f'            get => this.{field} = this.ReadProperty({default_value});\n'
             '            set\n'
             '            {\n'
             f'                if (this.SetProperty(ref this.{field}, value))\n'
@@ -1021,7 +1082,7 @@ def build_display_property(spec):
     attribute_block = ''.join(f'{attribute}\n' for attribute in attributes)
     return (
         f'{attribute_block}'
-        f'        public string {spec["name"]}\n'
+        f'        public {spec["type"]} {spec["name"]}\n'
         '        {\n'
         f'{accessor}'
         '        }\n'
@@ -1456,16 +1517,25 @@ class PluginGeneratorApp(tk.Tk):
 
         self.display_property_specs = []
 
-        tree_columns = ('identifier', 'display_name', 'category', 'order', 'persisted', 'browsable')
+        tree_columns = ('identifier', 'type', 'default', 'display_name', 'category', 'persisted', 'browsable')
         column_headings = {
             'identifier': 'Identifier',
+            'type': 'Type',
+            'default': 'Default',
             'display_name': 'Display Name',
             'category': 'Category',
-            'order': 'Order',
             'persisted': 'Persisted',
             'browsable': 'Browsable',
         }
-        column_widths = {'identifier': 120, 'display_name': 140, 'category': 100, 'order': 50, 'persisted': 70, 'browsable': 70}
+        column_widths = {
+            'identifier': 110,
+            'type': 70,
+            'default': 90,
+            'display_name': 120,
+            'category': 90,
+            'persisted': 65,
+            'browsable': 65,
+        }
         self.property_tree = ttk.Treeview(property_frame, columns=tree_columns, show='headings', height=6)
         for column in tree_columns:
             self.property_tree.heading(column, text=column_headings[column])
@@ -1554,9 +1624,10 @@ class PluginGeneratorApp(tk.Tk):
         for spec in self.display_property_specs:
             self.property_tree.insert('', tk.END, values=(
                 spec['name'],
+                next(label for label, property_type in DISPLAY_PROPERTY_TYPES.items() if property_type == spec['type']),
+                str(spec['default']),
                 spec['display_name'],
                 spec['category'],
-                '' if spec['order'] is None else spec['order'],
                 'Yes' if spec['persisted'] else 'No',
                 'Yes' if spec['browsable'] else 'No',
             ))
@@ -1598,6 +1669,11 @@ class PluginGeneratorApp(tk.Tk):
         dialog.minsize(320, 260)
 
         identifier_var = tk.StringVar(value=initial.get('name', ''))
+        initial_type = initial.get('type', 'string')
+        type_var = tk.StringVar(value=next(
+            label for label, property_type in DISPLAY_PROPERTY_TYPES.items() if property_type == initial_type
+        ))
+        default_var = tk.StringVar(value=str(initial.get('default', '')))
         display_name_var = tk.StringVar(value=initial.get('display_name', ''))
         category_var = tk.StringVar(value=initial.get('category', ''))
         description_var = tk.StringVar(value=initial.get('description', ''))
@@ -1606,15 +1682,28 @@ class PluginGeneratorApp(tk.Tk):
         browsable_var = tk.BooleanVar(value=initial.get('browsable', True))
 
         fields = [
-            ('Property Name (required):', identifier_var),
-            ('Display Name:', display_name_var),
-            ('Category:', category_var),
-            ('Description:', description_var),
-            ('Order:', order_var),
+            ('Property Name (required):', identifier_var, 'entry'),
+            ('Type:', type_var, 'type'),
+            ('Default Value:', default_var, 'entry'),
+            ('Display Name:', display_name_var, 'entry'),
+            ('Category:', category_var, 'entry'),
+            ('Description:', description_var, 'entry'),
+            ('Order:', order_var, 'entry'),
         ]
-        for row, (label_text, var) in enumerate(fields):
+        for row, (label_text, var, field_kind) in enumerate(fields):
             tk.Label(dialog, text=label_text).grid(row=row, column=0, sticky='w', padx=8, pady=6)
-            tk.Entry(dialog, textvariable=var, width=35).grid(row=row, column=1, sticky='ew', padx=8, pady=6)
+            if field_kind == 'type':
+                ttk.Combobox(
+                    dialog,
+                    textvariable=var,
+                    values=tuple(DISPLAY_PROPERTY_TYPES),
+                    state='readonly',
+                    width=33,
+                ).grid(row=row, column=1, sticky='ew', padx=8, pady=6)
+            else:
+                tk.Entry(dialog, textvariable=var, width=35).grid(
+                    row=row, column=1, sticky='ew', padx=8, pady=6
+                )
         tk.Checkbutton(dialog, text='Persist to workbook', variable=persisted_var).grid(
             row=len(fields), column=0, columnspan=2, sticky='w', padx=8, pady=6)
         tk.Checkbutton(dialog, text='Visible in properties window (Browsable)', variable=browsable_var).grid(
@@ -1636,6 +1725,8 @@ class PluginGeneratorApp(tk.Tk):
                     order_var.get(),
                     persisted_var.get(),
                     browsable_var.get(),
+                    DISPLAY_PROPERTY_TYPES[type_var.get()],
+                    default_var.get(),
                     existing_names=existing_names,
                 )
             except ValueError as error:

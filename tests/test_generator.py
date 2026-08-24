@@ -11,6 +11,7 @@ from tools.PluginGenerator.gui import (
     behavior_uses_parameters,
     build_atlas_parameter,
     build_display_property,
+    build_display_property_field,
     build_display_property_spec,
     generate_plugin,
 )
@@ -49,13 +50,51 @@ class ParameterAndPropertyTests(unittest.TestCase):
             build_display_property_spec('vCar:Chassis')
 
     def test_display_property_preserves_pascal_case(self):
-        spec = build_display_property_spec('FontSize', persisted=True)
+        spec = build_display_property_spec(
+            'FontSize',
+            persisted=True,
+            property_type='int',
+            default_value='20',
+        )
         source = build_display_property(spec)
 
-        self.assertIn('public string FontSize', source)
+        self.assertIn('public int FontSize', source)
         self.assertNotIn('Fontsize', source)
-        self.assertIn('ReadProperty("FontSize")', source)
+        self.assertIn('ReadProperty(20)', source)
         self.assertIn('SaveProperty(value)', source)
+
+    def test_display_property_types_generate_csharp_literals(self):
+        cases = [
+            ('Title', 'string', 'Ready', 'private string _title = "Ready";'),
+            ('Count', 'int', '12', 'private int _count = 12;'),
+            ('Scale', 'double', '1.5', 'private double _scale = 1.5d;'),
+            ('Enabled', 'bool', 'true', 'private bool _enabled = true;'),
+        ]
+        for name, property_type, default_value, expected in cases:
+            with self.subTest(property_type=property_type):
+                spec = build_display_property_spec(
+                    name,
+                    property_type=property_type,
+                    default_value=default_value,
+                )
+                self.assertIn(expected, build_display_property_field(spec))
+                self.assertIn(f'public {property_type} {name}', build_display_property(spec))
+
+    def test_invalid_typed_defaults_are_rejected(self):
+        invalid_defaults = [
+            ('int', '1.5'),
+            ('double', 'not a number'),
+            ('double', 'NaN'),
+            ('bool', 'sometimes'),
+        ]
+        for property_type, default_value in invalid_defaults:
+            with self.subTest(property_type=property_type, default=default_value):
+                with self.assertRaises(ValueError):
+                    build_display_property_spec(
+                        'Setting',
+                        property_type=property_type,
+                        default_value=default_value,
+                    )
 
 
 class GenerationTests(unittest.TestCase):
