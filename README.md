@@ -36,7 +36,7 @@ python -m tools.PluginGenerator.generator MyPlugin --output C:\path\to\output --
 
 The GUI provides Browse controls for the output folder, library project, and PNG icon. After a successful generation, the selected paths are persisted in the operating system's per-user application settings and can be changed later in the GUI or overridden with the CLI options. The selected icon is copied into the generated project's `Resources` folder and referenced by filename in both the `.csproj` resource entry and `IconUri`. For parameter-enabled plugins, the selected `DisplayPluginLibrary` project is copied into the generated project container and added to the solution, so the generated solution does not depend on the original library location. No machine-specific paths are stored in this repository or in generated project files.
 
-Click **Create...** beside the icon field to open the built-in icon maker. Choose a graph, pulse, gauge, or grid symbol; select background and accent colors; choose a PNG size; then click **Save and Use**. The saved PNG is selected for the plugin automatically. Icon creation uses only Python's standard library.
+Click **Create...** beside the icon field to open the built-in icon maker. Choose a telemetry or racing symbol—including graph, pulse, gauge, grid, checkered flag, steering wheel, tyre, stopwatch, and race car—then select background and accent colors and click **Save and Use**. The default output is the 16×16 PNG size used by most ATLAS example plugins; 24, 32, and 64 pixel options are also available. The saved PNG is selected for the plugin automatically. Icon creation uses only Python's standard library.
 
 To run the icon maker by itself:
 

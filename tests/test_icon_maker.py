@@ -38,6 +38,15 @@ class IconMakerTests(unittest.TestCase):
             width, height = struct.unpack('>II', data[16:24])
             self.assertEqual((64, 64), (width, height))
 
+    def test_png_writer_defaults_to_atlas_icon_size(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'icon.png'
+
+            create_icon_png(path, symbol='checkered-flag')
+            data = path.read_bytes()
+
+            self.assertEqual((16, 16), struct.unpack('>II', data[16:24]))
+
     def test_unknown_symbol_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Unknown icon symbol'):
             render_icon_pixels(32, '#000000', '#FFFFFF', 'car')

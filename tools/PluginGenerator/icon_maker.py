@@ -3,7 +3,10 @@ import struct
 import zlib
 
 
-ICON_SYMBOLS = ('graph', 'pulse', 'gauge', 'grid')
+ICON_SYMBOLS = (
+    'graph', 'pulse', 'gauge', 'grid',
+    'checkered-flag', 'steering-wheel', 'tyre', 'stopwatch', 'race-car',
+)
 
 
 def parse_hex_color(value):
@@ -60,6 +63,12 @@ def _circle(pixels, size, center, radius, color, filled=False, thickness=1):
                 _set_pixel(pixels, size, x, y, color)
 
 
+def _rectangle(pixels, size, left, top, right, bottom, color):
+    for y in range(top, bottom):
+        for x in range(left, right):
+            _set_pixel(pixels, size, x, y, color)
+
+
 def render_icon_pixels(size, background, foreground, symbol):
     if not isinstance(size, int) or size < 16 or size > 1024:
         raise ValueError('Icon size must be between 16 and 1024 pixels.')
@@ -96,7 +105,7 @@ def render_icon_pixels(size, background, foreground, symbol):
         _circle(pixels, size, (middle, middle), radius, foreground, thickness=thickness)
         _line(pixels, size, (middle, middle), (size * 3 // 4, size // 3), foreground, thickness)
         _circle(pixels, size, (middle, middle), thickness * 2, foreground, filled=True)
-    else:
+    elif symbol == 'grid':
         cell = (size - (margin * 2)) // 2
         gap = max(2, thickness)
         for row in range(2):
@@ -105,9 +114,45 @@ def render_icon_pixels(size, background, foreground, symbol):
                 top = margin + (row * cell) + gap
                 right = margin + ((column + 1) * cell) - gap
                 bottom = margin + ((row + 1) * cell) - gap
-                for y in range(top, bottom):
-                    for x in range(left, right):
-                        _set_pixel(pixels, size, x, y, foreground)
+                _rectangle(pixels, size, left, top, right, bottom, foreground)
+    elif symbol == 'checkered-flag':
+        pole_x = margin
+        _line(pixels, size, (pole_x, margin), (pole_x, size - margin), foreground, thickness)
+        flag_width = size - (margin * 2)
+        cell = max(2, flag_width // 4)
+        for row in range(3):
+            for column in range(4):
+                if (row + column) % 2 == 0:
+                    left = pole_x + thickness + (column * cell)
+                    top = margin + (row * cell)
+                    _rectangle(pixels, size, left, top, left + cell, top + cell, foreground)
+    elif symbol == 'steering-wheel':
+        radius = (size // 2) - margin
+        _circle(pixels, size, (middle, middle), radius, foreground, thickness=thickness)
+        _circle(pixels, size, (middle, middle), max(1, thickness), foreground, filled=True)
+        for end in ((middle, margin), (margin, size - margin), (size - margin, size - margin)):
+            _line(pixels, size, (middle, middle), end, foreground, thickness)
+    elif symbol == 'tyre':
+        radius = (size // 2) - margin
+        _circle(pixels, size, (middle, middle), radius, foreground, thickness=max(thickness, size // 8))
+        _circle(pixels, size, (middle, middle), max(1, radius // 3), foreground, thickness=1)
+    elif symbol == 'stopwatch':
+        radius = (size // 2) - margin
+        center = (middle, middle + max(1, size // 16))
+        _circle(pixels, size, center, radius, foreground, thickness=thickness)
+        _rectangle(pixels, size, middle - thickness, margin - thickness, middle + thickness + 1, margin + thickness, foreground)
+        _line(pixels, size, center, (middle, center[1] - (radius // 2)), foreground, thickness)
+        _line(pixels, size, center, (middle + (radius // 2), center[1]), foreground, thickness)
+    else:
+        body_left = margin
+        body_right = size - margin
+        body_top = size * 2 // 5
+        body_bottom = size * 3 // 4
+        _rectangle(pixels, size, body_left, body_top, body_right, body_bottom, foreground)
+        _rectangle(pixels, size, size * 2 // 5, margin, size * 3 // 5, body_top, foreground)
+        wheel_radius = max(1, size // 10)
+        _circle(pixels, size, (body_left, body_bottom), wheel_radius, foreground, filled=True)
+        _circle(pixels, size, (body_right - 1, body_bottom), wheel_radius, foreground, filled=True)
     return bytes(pixels)
 
 
@@ -116,7 +161,7 @@ def _png_chunk(chunk_type, data):
     return struct.pack('>I', len(data)) + body + struct.pack('>I', binascii.crc32(body) & 0xFFFFFFFF)
 
 
-def create_icon_png(path, size=256, background='#20242B', foreground='#27B5E8', symbol='graph'):
+def create_icon_png(path, size=16, background='#20242B', foreground='#27B5E8', symbol='graph'):
     pixels = render_icon_pixels(size, background, foreground, symbol)
     rows = b''.join(b'\x00' + pixels[offset:offset + (size * 4)] for offset in range(0, len(pixels), size * 4))
     png = (
@@ -143,7 +188,7 @@ def open_icon_maker(parent, initial_directory=''):
     background_var = tk.StringVar(value='#20242B')
     foreground_var = tk.StringVar(value='#27B5E8')
     symbol_var = tk.StringVar(value='graph')
-    size_var = tk.StringVar(value='256')
+    size_var = tk.StringVar(value='16')
     result = {}
 
     canvas = tk.Canvas(dialog, width=192, height=192, highlightthickness=1, highlightbackground='#777777')
@@ -175,10 +220,37 @@ def open_icon_maker(parent, initial_directory=''):
             canvas.create_oval(margin, margin, 158, 158, outline=foreground, width=width)
             canvas.create_line(middle, middle, 140, 65, fill=foreground, width=width)
             canvas.create_oval(88, 88, 104, 104, fill=foreground, outline='')
-        else:
+        elif symbol == 'grid':
             for left, top, right, bottom in ((40, 40, 88, 88), (104, 40, 152, 88),
                                               (40, 104, 88, 152), (104, 104, 152, 152)):
                 canvas.create_rectangle(left, top, right, bottom, fill=foreground, outline='')
+        elif symbol == 'checkered-flag':
+            canvas.create_line(48, 35, 48, 158, fill=foreground, width=7)
+            cell = 24
+            for row in range(3):
+                for column in range(4):
+                    if (row + column) % 2 == 0:
+                        left = 54 + (column * cell)
+                        top = 38 + (row * cell)
+                        canvas.create_rectangle(left, top, left + cell, top + cell, fill=foreground, outline='')
+        elif symbol == 'steering-wheel':
+            canvas.create_oval(34, 34, 158, 158, outline=foreground, width=7)
+            canvas.create_oval(88, 88, 104, 104, fill=foreground, outline='')
+            for end in ((96, 35), (42, 145), (150, 145)):
+                canvas.create_line(96, 96, *end, fill=foreground, width=7)
+        elif symbol == 'tyre':
+            canvas.create_oval(38, 38, 154, 154, outline=foreground, width=18)
+            canvas.create_oval(78, 78, 114, 114, outline=foreground, width=3)
+        elif symbol == 'stopwatch':
+            canvas.create_oval(38, 44, 154, 160, outline=foreground, width=7)
+            canvas.create_rectangle(87, 25, 105, 45, fill=foreground, outline='')
+            canvas.create_line(96, 102, 96, 66, fill=foreground, width=7)
+            canvas.create_line(96, 102, 128, 102, fill=foreground, width=7)
+        else:
+            canvas.create_rectangle(38, 78, 154, 138, fill=foreground, outline='')
+            canvas.create_rectangle(78, 42, 114, 78, fill=foreground, outline='')
+            canvas.create_oval(28, 124, 52, 148, fill=foreground, outline='')
+            canvas.create_oval(140, 124, 164, 148, fill=foreground, outline='')
 
     def choose_color(variable):
         color = colorchooser.askcolor(variable.get(), parent=dialog)[1]
@@ -200,7 +272,7 @@ def open_icon_maker(parent, initial_directory=''):
     tk.Button(dialog, text='Choose...', command=lambda: choose_color(foreground_var)).grid(row=2, column=3, padx=8)
 
     tk.Label(dialog, text='PNG size:').grid(row=3, column=1, sticky='w', padx=8, pady=4)
-    ttk.Combobox(dialog, textvariable=size_var, values=('64', '128', '256', '512'), state='readonly', width=10).grid(
+    ttk.Combobox(dialog, textvariable=size_var, values=('16', '24', '32', '64'), state='readonly', width=10).grid(
         row=3, column=2, sticky='w', padx=8
     )
 
