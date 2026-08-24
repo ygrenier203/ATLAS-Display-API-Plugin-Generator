@@ -340,11 +340,13 @@ def default_workspace_root():
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 
-def validate_plugin_name(name):
+def normalize_plugin_name(name):
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
         raise ValueError('Plugin name must be a valid C# identifier (letters, numbers, and underscores only).')
+    # ATLAS only loads assemblies whose name contains "Plugin".
     if 'plugin' not in name.lower():
-        raise ValueError('Plugin name must contain "Plugin" so ATLAS can discover the plugin.')
+        name += 'Plugin'
+    return name
 
 
 def parse_parameter_names(value):
@@ -360,7 +362,7 @@ def escape_csharp_string(value):
 
 
 def generate_plugin(name, base_out, include_view=True, include_parameters=True, parameter_names=None, parameter_max_count=100, workspace_root=None, description=None, library_project=None):
-    validate_plugin_name(name)
+    name = normalize_plugin_name(name)
     if not isinstance(parameter_max_count, int) or parameter_max_count < 1:
         raise ValueError('Maximum parameter count must be a positive integer.')
     parameter_names = list(parameter_names or [])
@@ -644,7 +646,8 @@ class PluginGeneratorApp(tk.Tk):
             })
 
             # Show success message
-            success_msg = f'Plugin "{name}" created successfully at:\n{target}'
+            generated_name = os.path.basename(target)
+            success_msg = f'Plugin "{generated_name}" created successfully at:\n{target}'
             messagebox.showinfo('Success', success_msg)
             
             # Open folder if requested
