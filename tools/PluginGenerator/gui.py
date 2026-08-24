@@ -1326,7 +1326,7 @@ def command_display_label(name):
     return re.sub(r'(?<!^)(?=[A-Z])', ' ', name)
 
 
-def build_command_spec(name, button_label='', include_button=True, existing_names=None):
+def build_command_spec(name, button_label='', include_button=True, existing_names=None, generate_can_execute=False):
     name = (name or '').strip()
     if name.endswith('Command'):
         name = name[:-len('Command')]
@@ -1338,6 +1338,7 @@ def build_command_spec(name, button_label='', include_button=True, existing_name
         'name': name,
         'button_label': (button_label or '').strip() or command_display_label(name),
         'include_button': bool(include_button),
+        'generate_can_execute': bool(generate_can_execute),
     }
 
 
@@ -1349,14 +1350,28 @@ def build_command_property(spec):
 
 
 def build_command_initializer(spec):
-    return f'            this.{spec["name"]}Command = new DelegateCommand(this.On{spec["name"]});\n'
+    can_execute = f', this.Can{spec["name"]}' if spec.get('generate_can_execute', False) else ''
+    return (
+        f'            this.{spec["name"]}Command = '
+        f'new DelegateCommand(this.On{spec["name"]}{can_execute});\n'
+    )
 
 
 def build_command_handler(spec):
-    return (
+    handler = (
         f'        private void On{spec["name"]}()\n'
         '        {\n'
         f'            // TODO: Implement {spec["name"]}.\n'
+        '        }\n'
+    )
+    if not spec.get('generate_can_execute', False):
+        return handler
+    return (
+        f'{handler}\n'
+        f'        private bool Can{spec["name"]}()\n'
+        '        {\n'
+        f'            // TODO: Return whether {spec["name"]} is currently available.\n'
+        '            return true;\n'
         '        }\n'
     )
 
@@ -1785,16 +1800,18 @@ class PluginGeneratorApp(tk.Tk):
         self.command_specs = []
         self.command_tree = ttk.Treeview(
             command_frame,
-            columns=('name', 'button_label', 'include_button'),
+            columns=('name', 'button_label', 'include_button', 'can_execute'),
             show='headings',
             height=4,
         )
         self.command_tree.heading('name', text='Command')
         self.command_tree.heading('button_label', text='Button Label')
         self.command_tree.heading('include_button', text='Add Button')
+        self.command_tree.heading('can_execute', text='Enabled Rule')
         self.command_tree.column('name', width=150, anchor='w')
         self.command_tree.column('button_label', width=180, anchor='w')
         self.command_tree.column('include_button', width=80, anchor='w')
+        self.command_tree.column('can_execute', width=100, anchor='w')
         self.command_tree.pack(fill=tk.BOTH, expand=True, pady=4)
         self.command_tree.bind('<Double-1>', lambda event: self.edit_selected_command())
 
@@ -2025,6 +2042,7 @@ class PluginGeneratorApp(tk.Tk):
                 f'{spec["name"]}Command',
                 spec['button_label'],
                 'Yes' if spec['include_button'] else 'No',
+                'Generated' if spec.get('generate_can_execute', False) else 'Always',
             ))
 
     def add_command_dialog(self):
@@ -2065,6 +2083,7 @@ class PluginGeneratorApp(tk.Tk):
         name_var = tk.StringVar(value=initial.get('name', ''))
         button_label_var = tk.StringVar(value=initial.get('button_label', ''))
         include_button_var = tk.BooleanVar(value=initial.get('include_button', True))
+        can_execute_var = tk.BooleanVar(value=initial.get('generate_can_execute', False))
 
         tk.Label(dialog, text='Action Name (required):').grid(row=0, column=0, sticky='w', padx=8, pady=6)
         tk.Entry(dialog, textvariable=name_var, width=35).grid(row=0, column=1, sticky='ew', padx=8, pady=6)
@@ -2073,6 +2092,11 @@ class PluginGeneratorApp(tk.Tk):
         tk.Checkbutton(dialog, text='Add button to generated view', variable=include_button_var).grid(
             row=2, column=0, columnspan=2, sticky='w', padx=8, pady=6
         )
+        tk.Checkbutton(
+            dialog,
+            text='Generate an enabled/disabled rule (CanExecute)',
+            variable=can_execute_var,
+        ).grid(row=3, column=0, columnspan=2, sticky='w', padx=8, pady=6)
         dialog.columnconfigure(1, weight=1)
 
         result = {}
@@ -2085,6 +2109,7 @@ class PluginGeneratorApp(tk.Tk):
                     button_label_var.get(),
                     include_button_var.get(),
                     existing_names,
+                    can_execute_var.get(),
                 )
             except ValueError as error:
                 messagebox.showerror('Invalid Command', str(error), parent=dialog)
@@ -2092,7 +2117,7 @@ class PluginGeneratorApp(tk.Tk):
             dialog.destroy()
 
         button_frame = tk.Frame(dialog)
-        button_frame.grid(row=3, column=0, columnspan=2, pady=10)
+        button_frame.grid(row=4, column=0, columnspan=2, pady=10)
         tk.Button(button_frame, text='OK', command=on_ok, width=10).pack(side=tk.LEFT, padx=4)
         tk.Button(button_frame, text='Cancel', command=dialog.destroy, width=10).pack(side=tk.LEFT, padx=4)
         dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)

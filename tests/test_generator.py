@@ -14,6 +14,8 @@ from tools.PluginGenerator.gui import (
     build_generated_plugin,
     build_atlas_parameter,
     build_command_button,
+    build_command_handler,
+    build_command_initializer,
     build_command_spec,
     build_display_property,
     build_display_property_field,
@@ -125,6 +127,17 @@ class ParameterAndPropertyTests(unittest.TestCase):
         spec = build_command_spec('Export', 'Save & Close')
 
         self.assertIn('Content="Save &amp; Close"', build_command_button(spec))
+
+    def test_command_can_generate_enabled_rule(self):
+        spec = build_command_spec('Export', generate_can_execute=True)
+
+        self.assertIn(
+            'new DelegateCommand(this.OnExport, this.CanExport)',
+            build_command_initializer(spec),
+        )
+        handler = build_command_handler(spec)
+        self.assertIn('private bool CanExport()', handler)
+        self.assertIn('return true;', handler)
 
 
 class GenerationTests(unittest.TestCase):
