@@ -17,6 +17,7 @@ from tools.PluginGenerator.gui import (
     build_command_handler,
     build_command_initializer,
     build_command_spec,
+    build_status_state,
     build_display_property,
     build_display_property_field,
     build_display_property_spec,
@@ -139,6 +140,15 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('private bool CanExport()', handler)
         self.assertIn('return true;', handler)
 
+    def test_status_state_uses_property_notifications(self):
+        fields, properties = build_status_state()
+
+        self.assertIn('private bool isBusy;', fields)
+        self.assertIn('public bool IsBusy', properties)
+        self.assertIn('public string StatusMessage', properties)
+        self.assertIn('public string ErrorMessage', properties)
+        self.assertEqual(3, properties.count('this.SetProperty('))
+
 
 class GenerationTests(unittest.TestCase):
     def generate(self, **options):
@@ -182,6 +192,14 @@ class GenerationTests(unittest.TestCase):
         ).read_text(encoding='utf-8')
 
         self.assertIn('AddParameterContainer("vCar:Chassis")', viewmodel)
+
+    def test_basic_plugin_can_generate_status_state(self):
+        target = self.generate(include_parameters=False, include_status_state=True)
+        viewmodel = (target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+
+        self.assertIn('public bool IsBusy', viewmodel)
+        self.assertIn('public string StatusMessage', viewmodel)
+        self.assertIn('public string ErrorMessage', viewmodel)
         self.assertNotIn('public string Vcar', viewmodel)
 
     def test_generated_project_can_disable_deployment_during_validation(self):

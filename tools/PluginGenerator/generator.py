@@ -30,6 +30,7 @@ def run(args=None):
 	)
 	parser.add_argument('--max-parameters', type=int, default=100, help='maximum number of display parameters')
 	parser.add_argument('--build', action='store_true', help='build and validate the generated solution without deploying it')
+	parser.add_argument('--status-state', action='store_true', help='generate IsBusy, StatusMessage, and ErrorMessage properties')
 	parser.add_argument('--clear-settings', action='store_true', help='clear persisted paths used by the generator and exit')
 	options = parser.parse_args(args)
 
@@ -97,6 +98,7 @@ def run(args=None):
 		behavior=behavior,
 		atlas_parameters=options.atlas_parameter,
 		command_specs=command_specs,
+		include_status_state=options.status_state,
 		parameter_max_count=options.max_parameters,
 		workspace_root=default_workspace_root(),
 		library_project=library_project,

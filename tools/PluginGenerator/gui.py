@@ -144,7 +144,7 @@ namespace {namespace}
     [DisplayPluginSettings(ParametersMaxCount = {parameter_max_count})]
     public sealed class {viewmodel_class} : ParameterSampleDisplayViewModelBase<ParameterViewModel>
     {{
-{display_property_fields}
+{status_state_fields}{display_property_fields}
         public {viewmodel_class}(
             ISignalBus signalBus,
             IDataRequestSignalFactory dataRequestSignalFactory,
@@ -153,7 +153,7 @@ namespace {namespace}
         {{
 {extra_ctor_assignments}{command_initializers}        }}
 
-{display_properties}
+{status_state_properties}{display_properties}
 {command_properties}
     {atlas_parameter_setup}
         protected override ParameterViewModel OnCreateParameterViewModel() => new ParameterViewModel();
@@ -176,9 +176,9 @@ namespace {namespace}
     [DisplayPluginSettings(ParametersMaxCount = {parameter_max_count})]
     public sealed class {viewmodel_class} : DisplayPluginViewModel
     {{
-{display_property_fields}
+{status_state_fields}{display_property_fields}
 {service_members}
-{display_properties}
+{status_state_properties}{display_properties}
 {command_properties}
 {command_handlers}    }}
 }}
@@ -208,7 +208,7 @@ namespace {namespace}
     public sealed class {viewmodel_class} : TemplateDisplayViewModelBase
     {{
         private int dataRequestSampleCount;
-{display_property_fields}
+{status_state_fields}{display_property_fields}
         public {viewmodel_class}(
             ISignalBus signalBus,
             IDataRequestSignalFactory dataRequestSignalFactory,
@@ -242,7 +242,7 @@ namespace {namespace}
         public ObservableCollection<TimebaseSeriesViewModel> Series {{ get; }} =
             new ObservableCollection<TimebaseSeriesViewModel>();
 
-{display_properties}
+{status_state_properties}{display_properties}
 {command_properties}
     {atlas_parameter_setup}
         protected override async Task OnMakeTimebaseDataRequestsAsync(ICompositeSession compositeSession)
@@ -506,7 +506,7 @@ namespace {namespace}
     [DisplayPluginSettings(ParametersMaxCount = {parameter_max_count})]
     public sealed class {viewmodel_class} : TemplateDisplayViewModelBase
     {{
-{display_property_fields}
+{status_state_fields}{display_property_fields}
         public {viewmodel_class}(
             ISignalBus signalBus,
             IDataRequestSignalFactory dataRequestSignalFactory,
@@ -522,7 +522,7 @@ namespace {namespace}
         public ObservableCollection<CompareRowViewModel> Rows {{ get; }} =
             new ObservableCollection<CompareRowViewModel>();
 
-{display_properties}
+{status_state_properties}{display_properties}
 {command_properties}
     {atlas_parameter_setup}
         protected override async Task OnMakeCursorDataRequestsAsync(ICompositeSession compositeSession)
@@ -1386,9 +1386,40 @@ def build_command_button(spec):
     )
 
 
+def build_status_state():
+    fields = (
+        '        private bool isBusy;\n'
+        '        private string statusMessage = string.Empty;\n'
+        '        private string errorMessage = string.Empty;\n'
+    )
+    properties = '''        [Browsable(false)]
+        public bool IsBusy
+        {
+            get => this.isBusy;
+            private set => this.SetProperty(ref this.isBusy, value);
+        }
+
+        [Browsable(false)]
+        public string StatusMessage
+        {
+            get => this.statusMessage;
+            private set => this.SetProperty(ref this.statusMessage, value);
+        }
+
+        [Browsable(false)]
+        public string ErrorMessage
+        {
+            get => this.errorMessage;
+            private set => this.SetProperty(ref this.errorMessage, value);
+        }
+'''
+    return fields, properties
+
+
 def generate_plugin(name, base_out, include_view=True, include_parameters=True, behavior=None, atlas_parameters=None,
                     display_property_specs=None, command_specs=None, parameter_max_count=100, workspace_root=None,
-                    description=None, library_project=None, icon_path=None, service_names=None):
+                    description=None, library_project=None, icon_path=None, service_names=None,
+                    include_status_state=False):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -1515,6 +1546,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     command_initializers = ''.join(build_command_initializer(spec) for spec in command_specs)
     command_handlers = '\n'.join(build_command_handler(spec) for spec in command_specs)
     command_buttons = ''.join(build_command_button(spec) for spec in command_specs)
+    status_state_fields, status_state_properties = build_status_state() if include_status_state else ('', '')
     if include_parameters:
         extra_service_fields = build_service_fields(service_entries)
         display_property_fields = '\n'.join(filter(None, [display_property_fields, extra_service_fields]))
@@ -1558,6 +1590,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             command_properties=command_properties,
             command_initializers=command_initializers,
             command_handlers=command_handlers,
+            status_state_fields=status_state_fields,
+            status_state_properties=status_state_properties,
         ),
     }
     if behavior == BEHAVIOR_CURRENT_VALUE:
@@ -1838,6 +1872,13 @@ class PluginGeneratorApp(tk.Tk):
             text='Build and validate after generation',
             variable=self.build_after_generation_var,
         ).grid(row=2, column=0, columnspan=2, sticky='w', pady=4)
+
+        self.status_state_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            advanced_frame,
+            text='Generate loading, status, and error state',
+            variable=self.status_state_var,
+        ).grid(row=3, column=0, columnspan=2, sticky='w', pady=4)
         
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
@@ -2141,6 +2182,7 @@ class PluginGeneratorApp(tk.Tk):
         self.update_behavior_states()
         self.open_folder_var.set(True)
         self.build_after_generation_var.set(True)
+        self.status_state_var.set(False)
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
@@ -2205,6 +2247,7 @@ class PluginGeneratorApp(tk.Tk):
                 atlas_parameters=atlas_parameters,
                 display_property_specs=display_property_specs,
                 command_specs=command_specs,
+                include_status_state=self.status_state_var.get(),
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,
