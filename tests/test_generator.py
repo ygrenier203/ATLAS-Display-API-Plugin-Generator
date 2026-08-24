@@ -4,6 +4,7 @@ from pathlib import Path
 
 from tools.PluginGenerator.gui import (
     BEHAVIOR_BASIC,
+    BEHAVIOR_COMPARE_SESSIONS,
     BEHAVIOR_CURRENT_AND_RANGE,
     BEHAVIOR_CURRENT_VALUE,
     BEHAVIOR_VISIBLE_RANGE,
@@ -32,6 +33,9 @@ class ParameterAndPropertyTests(unittest.TestCase):
 
     def test_combined_behavior_uses_parameter_support(self):
         self.assertTrue(behavior_uses_parameters(BEHAVIOR_CURRENT_AND_RANGE))
+
+    def test_compare_behavior_uses_parameter_support(self):
+        self.assertTrue(behavior_uses_parameters(BEHAVIOR_COMPARE_SESSIONS))
 
     def test_atlas_identifier_accepts_colons(self):
         self.assertEqual('vCar:Chassis', build_atlas_parameter(' vCar:Chassis '))
@@ -141,6 +145,29 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('UpdateCurrentValue', series)
         self.assertIn('public double CurrentValue', series)
         self.assertIn('CurrentValue', view)
+
+    def test_compare_behavior_generates_composite_session_workflow(self):
+        target = self.generate(
+            behavior=BEHAVIOR_COMPARE_SESSIONS,
+            library_project=str(LIBRARY_PROJECT),
+            atlas_parameters=['vCar:Chassis'],
+        )
+        project = target / 'SeparationPlugin'
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+        row = (project / 'CompareRowViewModel.cs').read_text(encoding='utf-8')
+        value = (project / 'CompareSessionValueViewModel.cs').read_text(encoding='utf-8')
+        view = (project / 'SeparationPluginView.xaml').read_text(encoding='utf-8')
+
+        self.assertIn('Subscribe<CompositeSampleResultSignal>', viewmodel)
+        self.assertIn('CreateCompositeSampleRequestSignal', viewmodel)
+        self.assertIn('DisplayParameterService.ParameterContainers', viewmodel)
+        self.assertIn('parameterValues.Lock()', viewmodel)
+        self.assertIn('parameterValues.Unlock()', viewmodel)
+        self.assertIn('ExecuteOnUiAsync', viewmodel)
+        self.assertIn('ObservableCollection<CompareSessionValueViewModel>', row)
+        self.assertIn('CompositeSessionKey SessionKey', value)
+        self.assertIn('ItemsSource="{Binding Rows}"', view)
+        self.assertIn('ItemsSource="{Binding SessionValues}"', view)
 
 
 if __name__ == '__main__':

@@ -464,6 +464,233 @@ CURRENT_VALUE_UPDATE_METHOD = '''        public void UpdateCurrentValue(double v
 CURRENT_VALUE_TEXT = '''                            <TextBlock Text="{Binding CurrentValue, StringFormat='Current: {0:F3}'}"
                                        FontSize="20" Foreground="White" />'''
 
+COMPARE_VIEWMODEL_TEMPLATE = '''using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
+using System.Linq;
+using System.Threading.Tasks;
+
+using DisplayPluginLibrary;
+
+using MAT.Atlas.Api.Core.Diagnostics;
+using MAT.Atlas.Api.Core.Signals;
+using MAT.Atlas.Client.Platform.Data;
+using MAT.Atlas.Client.Platform.Data.Signals;
+using MAT.Atlas.Client.Platform.Sessions;
+using MAT.Atlas.Client.Presentation.Plugins;
+{extra_usings}
+namespace {namespace}
+{{
+    [DisplayPluginSettings(ParametersMaxCount = {parameter_max_count})]
+    public sealed class {viewmodel_class} : TemplateDisplayViewModelBase
+    {{
+{display_property_fields}
+        public {viewmodel_class}(
+            ISignalBus signalBus,
+            IDataRequestSignalFactory dataRequestSignalFactory,
+            ILogger logger{extra_ctor_params}) :
+            base(signalBus, dataRequestSignalFactory, logger)
+        {{
+            this.Disposables.Add(this.SignalBus.Subscribe<CompositeSampleResultSignal>(
+                this.HandleCompositeSampleResultSignal,
+                signal => signal.SourceId == this.ScopeIdentity.Guid));
+{extra_ctor_assignments}        }}
+
+        [Browsable(false)]
+        public ObservableCollection<CompareRowViewModel> Rows {{ get; }} =
+            new ObservableCollection<CompareRowViewModel>();
+
+{display_properties}
+    {atlas_parameter_setup}
+        protected override async Task OnMakeCursorDataRequestsAsync(ICompositeSession compositeSession)
+        {{
+            await this.ExecuteOnUiAsync(this.SyncRows);
+
+            foreach (var parameterContainer in this.DisplayParameterService.ParameterContainers)
+            {{
+                var signal = this.DataRequestSignalFactory.CreateCompositeSampleRequestSignal(
+                    this.ScopeIdentity.Guid,
+                    this.ActiveCompositeSessionContainer.Key,
+                    parameterContainer,
+                    compositeSession.CursorPoint + 1,
+                    1,
+                    SampleDirection.Previous);
+
+                this.SignalBus.Send(signal);
+            }}
+        }}
+
+        private async void HandleCompositeSampleResultSignal(CompositeSampleResultSignal signal)
+        {{
+            try
+            {{
+                var updates = new List<(CompositeSessionKey SessionKey, double Value)>();
+                foreach (var result in signal.Data.Results)
+                {{
+                    var parameterValues = result.Value.ParameterValues;
+                    parameterValues.Lock();
+                    try
+                    {{
+                        if (parameterValues.SampleCount > 0 && !double.IsNaN(parameterValues.Data[0]))
+                        {{
+                            updates.Add((result.Key, parameterValues.Data[0]));
+                        }}
+                    }}
+                    finally
+                    {{
+                        parameterValues.Unlock();
+                    }}
+                }}
+
+                var parameterIdentifier = signal.Data.Request.ParameterContainer.InstanceIdentifier;
+                await this.ExecuteOnUiAsync(() =>
+                {{
+                    var row = this.Rows.FirstOrDefault(item =>
+                        item.ParameterIdentifier == parameterIdentifier);
+                    if (row == null)
+                    {{
+                        return;
+                    }}
+
+                    foreach (var update in updates)
+                    {{
+                        row.Update(update.SessionKey, update.Value);
+                    }}
+                }});
+            }}
+            catch (Exception exception)
+            {{
+                this.Logger.Trace("Error handling compare-session data", exception);
+            }}
+        }}
+
+        private void SyncRows()
+        {{
+            var sessions = this.ActiveCompositeSessionContainer.CompositeSessions.ToList();
+            var existing = this.Rows.ToDictionary(row => row.ParameterIdentifier);
+            this.Rows.Clear();
+            foreach (var parameterContainer in this.DisplayParameterService.ParameterContainers)
+            {{
+                if (!existing.TryGetValue(parameterContainer.InstanceIdentifier, out var row))
+                {{
+                    row = new CompareRowViewModel(
+                        parameterContainer.InstanceIdentifier,
+                        parameterContainer.Name);
+                }}
+
+                row.Name = parameterContainer.Name;
+                row.SyncSessions(sessions);
+                this.Rows.Add(row);
+            }}
+        }}
+    }}
+}}
+'''
+
+COMPARE_ROW_VIEWMODEL_TEMPLATE = '''using System;
+using System.Collections.Generic;
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using System.Linq;
+
+using MAT.Atlas.Api.Core.Presentation;
+using MAT.Atlas.Client.Platform.Sessions;
+
+namespace {namespace}
+{{
+    public sealed class CompareRowViewModel : BindableBase
+    {{
+        private string name;
+
+        public CompareRowViewModel(Guid parameterIdentifier, string name)
+        {{
+            this.ParameterIdentifier = parameterIdentifier;
+            this.name = name;
+        }}
+
+        [Browsable(false)]
+        public Guid ParameterIdentifier {{ get; }}
+
+        public string Name
+        {{
+            get => this.name;
+            set => this.SetProperty(ref this.name, value);
+        }}
+
+        [Browsable(false)]
+        public ObservableCollection<CompareSessionValueViewModel> SessionValues {{ get; }} =
+            new ObservableCollection<CompareSessionValueViewModel>();
+
+        public void SyncSessions(IEnumerable<ICompositeSession> sessions)
+        {{
+            var existing = this.SessionValues.ToDictionary(value => value.SessionKey);
+            this.SessionValues.Clear();
+            foreach (var session in sessions)
+            {{
+                if (existing.TryGetValue(session.Key, out var value))
+                {{
+                    value.SessionName = session.Identifier.ToString();
+                    this.SessionValues.Add(value);
+                }}
+                else
+                {{
+                    this.SessionValues.Add(new CompareSessionValueViewModel(
+                        session.Key,
+                        session.Identifier.ToString()));
+                }}
+            }}
+        }}
+
+        public void Update(CompositeSessionKey sessionKey, double value)
+        {{
+            var sessionValue = this.SessionValues.FirstOrDefault(item => item.SessionKey == sessionKey);
+            if (sessionValue != null)
+            {{
+                sessionValue.Value = value;
+            }}
+        }}
+    }}
+}}
+'''
+
+COMPARE_SESSION_VALUE_VIEWMODEL_TEMPLATE = '''using System.ComponentModel;
+
+using MAT.Atlas.Api.Core.Presentation;
+using MAT.Atlas.Client.Platform.Sessions;
+
+namespace {namespace}
+{{
+    public sealed class CompareSessionValueViewModel : BindableBase
+    {{
+        private string sessionName;
+        private double value = double.NaN;
+
+        public CompareSessionValueViewModel(CompositeSessionKey sessionKey, string sessionName)
+        {{
+            this.SessionKey = sessionKey;
+            this.sessionName = sessionName;
+        }}
+
+        [Browsable(false)]
+        public CompositeSessionKey SessionKey {{ get; }}
+
+        public string SessionName
+        {{
+            get => this.sessionName;
+            set => this.SetProperty(ref this.sessionName, value);
+        }}
+
+        public double Value
+        {{
+            get => this.value;
+            set => this.SetProperty(ref this.value, value);
+        }}
+    }}
+}}
+'''
+
 PARAMETER_VIEWMODEL_TEMPLATE = '''using DisplayPluginLibrary;
 
 namespace {namespace}
@@ -580,6 +807,40 @@ TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                             <TextBlock Text="{{Binding SampleCount, StringFormat='Samples: {{0}}'}}" Foreground="White" />
                             <TextBlock Text="{{Binding Minimum, StringFormat='Minimum: {{0:F3}}'}}" Foreground="White" />
                             <TextBlock Text="{{Binding Maximum, StringFormat='Maximum: {{0:F3}}'}}" Foreground="White" />
+                        </StackPanel>
+                    </Border>
+                </DataTemplate>
+            </ItemsControl.ItemTemplate>
+        </ItemsControl>
+    </ScrollViewer>
+</UserControl>
+'''
+
+COMPARE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
+             x:Class="{namespace}.{view_class}">
+    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+        <ItemsControl ItemsSource="{{Binding Rows}}">
+            <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                    <Border BorderBrush="DarkGray" BorderThickness="1" Padding="12" Margin="4">
+                        <StackPanel>
+                            <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
+                            <ItemsControl ItemsSource="{{Binding SessionValues}}">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal" />
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <StackPanel Margin="0,4,20,0">
+                                            <TextBlock Text="{{Binding SessionName}}" Foreground="LightGray" />
+                                            <TextBlock Text="{{Binding Value, StringFormat=F3}}"
+                                                       FontSize="20" Foreground="White" />
+                                        </StackPanel>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
                         </StackPanel>
                     </Border>
                 </DataTemplate>
@@ -780,11 +1041,17 @@ SERVICE_DEFINITIONS = {
 BEHAVIOR_CURRENT_VALUE = 'Current value at cursor'
 BEHAVIOR_VISIBLE_RANGE = 'Visible range data'
 BEHAVIOR_CURRENT_AND_RANGE = 'Current value + visible range'
+BEHAVIOR_COMPARE_SESSIONS = 'Compare sessions at cursor'
 BEHAVIOR_BASIC = 'Basic display'
 
 
 def behavior_uses_parameters(behavior):
-    if behavior in (BEHAVIOR_CURRENT_VALUE, BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
+    if behavior in (
+        BEHAVIOR_CURRENT_VALUE,
+        BEHAVIOR_VISIBLE_RANGE,
+        BEHAVIOR_CURRENT_AND_RANGE,
+        BEHAVIOR_COMPARE_SESSIONS,
+    ):
         return True
     if behavior == BEHAVIOR_BASIC:
         return False
@@ -916,6 +1183,9 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         viewmodel_template = TIMEBASE_VIEWMODEL_TEMPLATE
         view_template = TIMEBASE_VIEW_XAML_TEMPLATE
+    elif behavior == BEHAVIOR_COMPARE_SESSIONS:
+        viewmodel_template = COMPARE_VIEWMODEL_TEMPLATE
+        view_template = COMPARE_VIEW_XAML_TEMPLATE
     else:
         viewmodel_template = BASIC_VIEWMODEL_TEMPLATE
         view_template = BASIC_VIEW_XAML_TEMPLATE
@@ -1000,6 +1270,11 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             current_value_field=CURRENT_VALUE_FIELD if include_current_value else '',
             current_value_property=CURRENT_VALUE_PROPERTY if include_current_value else '',
             current_value_update_method=CURRENT_VALUE_UPDATE_METHOD if include_current_value else '',
+        )
+    elif behavior == BEHAVIOR_COMPARE_SESSIONS:
+        files['CompareRowViewModel.cs'] = COMPARE_ROW_VIEWMODEL_TEMPLATE.format(namespace=namespace)
+        files['CompareSessionValueViewModel.cs'] = COMPARE_SESSION_VALUE_VIEWMODEL_TEMPLATE.format(
+            namespace=namespace,
         )
     if include_view:
         files[f'{name}View.xaml'] = view_template.format(
@@ -1124,6 +1399,7 @@ class PluginGeneratorApp(tk.Tk):
                 BEHAVIOR_CURRENT_VALUE,
                 BEHAVIOR_VISIBLE_RANGE,
                 BEHAVIOR_CURRENT_AND_RANGE,
+                BEHAVIOR_COMPARE_SESSIONS,
                 BEHAVIOR_BASIC,
             ),
             state='readonly',
@@ -1132,7 +1408,7 @@ class PluginGeneratorApp(tk.Tk):
         behavior_combo.bind('<<ComboboxSelected>>', lambda event: self.update_behavior_states())
         tk.Label(
             config_frame,
-            text='Choose cursor values, visible-range samples, both data sources, or a basic display.',
+            text='Choose cursor values, visible-range samples, both, compare sessions, or a basic display.',
             font=('Arial', 8, 'italic'), justify='left', wraplength=600,
         ).pack(anchor='w', pady=(0, 4))
         

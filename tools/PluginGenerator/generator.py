@@ -11,9 +11,9 @@ def run(args=None):
 	parser.add_argument('--no-view', action='store_true', help='omit the WPF view files')
 	parser.add_argument(
 		'--behavior',
-		choices=('current-value', 'visible-range', 'current-and-range', 'basic'),
+		choices=('current-value', 'visible-range', 'current-and-range', 'compare-sessions', 'basic'),
 		default='current-value',
-		help='plugin behavior: cursor values, visible time-range data, or a basic display',
+		help='plugin behavior: cursor values, visible-range data, compare sessions, or a basic display',
 	)
 	parser.add_argument('--no-parameters', action='store_true', help=argparse.SUPPRESS)
 	parser.add_argument(
@@ -28,6 +28,7 @@ def run(args=None):
 
 	from .gui import (
 		BEHAVIOR_BASIC,
+		BEHAVIOR_COMPARE_SESSIONS,
 		BEHAVIOR_CURRENT_AND_RANGE,
 		BEHAVIOR_CURRENT_VALUE,
 		BEHAVIOR_VISIBLE_RANGE,
@@ -54,6 +55,7 @@ def run(args=None):
 		'current-value': BEHAVIOR_CURRENT_VALUE,
 		'visible-range': BEHAVIOR_VISIBLE_RANGE,
 		'current-and-range': BEHAVIOR_CURRENT_AND_RANGE,
+		'compare-sessions': BEHAVIOR_COMPARE_SESSIONS,
 		'basic': BEHAVIOR_BASIC,
 	}
 	behavior = BEHAVIOR_BASIC if options.no_parameters else behavior_map[options.behavior]
