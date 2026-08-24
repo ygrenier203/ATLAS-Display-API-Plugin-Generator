@@ -90,6 +90,11 @@ if __name__ == '__main__':
         sys.exit(1)
 '''
 
+LIBRARY_POST_BUILD_PATTERN = re.compile(
+    r'\s*<Target\s+Name="PostBuild".*?</Target>\s*',
+    re.DOTALL,
+)
+
 PLUGIN_MODULE_TEMPLATE = '''using System.ComponentModel.Composition;
 
 using Autofac;
@@ -282,6 +287,7 @@ VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}}") = "{project_name}", "{project_name}\{project_name}.csproj", "{{{project_guid}}}"
 EndProject
+{library_project_entry}
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -292,6 +298,7 @@ Global
 		{{{project_guid}}}.Debug|x64.Build.0 = Debug|x64
 		{{{project_guid}}}.Release|x64.ActiveCfg = Release|x64
 		{{{project_guid}}}.Release|x64.Build.0 = Release|x64
+{library_configurations}
 	EndGlobalSection
 EndGlobal
 '''
@@ -393,17 +400,45 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     description = description or f'{name} ATLAS display plugin'
 
     csproj = CS_PROJ_TEMPLATE.format(project_guid=project_guid, icon_filename=icon_filename)
+    library_project_guid = str(uuid.uuid4()).upper()
+    library_project_entry = ''
+    library_configurations = ''
     if include_parameters:
         library_project = os.path.abspath(library_project or '')
         if not os.path.isfile(library_project):
             raise FileNotFoundError('Select a valid DisplayPluginLibrary.csproj before generating a parameter plugin.')
-        library_reference = os.path.relpath(library_project, project_directory).replace(os.sep, '/')
+        library_source_directory = os.path.dirname(library_project)
+        library_target_directory = os.path.join(target, 'DisplayPluginLibrary')
+        shutil.copytree(
+            library_source_directory,
+            library_target_directory,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns('bin', 'obj', '*.user', '*.suo'),
+        )
+        copied_library_project = os.path.join(library_target_directory, os.path.basename(library_project))
+        with open(copied_library_project, 'r', encoding='utf-8') as stream:
+            copied_library_contents = stream.read()
+        copied_library_contents = LIBRARY_POST_BUILD_PATTERN.sub('\n', copied_library_contents)
+        with open(copied_library_project, 'w', encoding='utf-8', newline='') as stream:
+            stream.write(copied_library_contents)
+        library_reference = os.path.relpath(copied_library_project, project_directory).replace(os.sep, '/')
         csproj = csproj.replace(
             '    <PackageReference Include="Atlas.DisplayAPI"',
             '    <ProjectReference Include="' + library_reference + '">\n'
             '      <Private>true</Private>\n'
             '    </ProjectReference>\n'
             '    <PackageReference Include="Atlas.DisplayAPI"',
+        )
+        library_project_entry = (
+            'Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = '
+            '"DisplayPluginLibrary", "DisplayPluginLibrary\\DisplayPluginLibrary.csproj", '
+            f'"{{{library_project_guid}}}"\nEndProject'
+        )
+        library_configurations = (
+            f'\t\t{{{library_project_guid}}}.Debug|x64.ActiveCfg = Debug|x64\n'
+            f'\t\t{{{library_project_guid}}}.Debug|x64.Build.0 = Debug|x64\n'
+            f'\t\t{{{library_project_guid}}}.Release|x64.ActiveCfg = Release|x64\n'
+            f'\t\t{{{library_project_guid}}}.Release|x64.Build.0 = Release|x64'
         )
 
     viewmodel_template = VIEWMODEL_TEMPLATE if include_parameters else BASIC_VIEWMODEL_TEMPLATE
@@ -465,6 +500,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     sln_content = SLN_TEMPLATE.format(
         project_name=name,
         project_guid=project_guid,
+        library_project_entry=library_project_entry,
+        library_configurations=library_configurations,
     )
     sln_path = os.path.join(target, f'{name}.sln')
     with open(sln_path, 'w', encoding='utf-8', newline='') as stream:
