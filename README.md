@@ -89,6 +89,8 @@ Visible-range and combined cursor/range plugins can select the `time-series` gra
 
 Generated time graphs include a grid, automatic per-series scaling, a color legend through the statistics cards, minimum/maximum/average/sample-count statistics, and a cursor overlay for combined cursor/range plugins.
 
+Computed traces can combine the first two raw graph series using `difference`, `sum`, `average`, or safe `ratio` operations. Enter comma-separated `Name:operation` values in the GUI or repeat `--computed-series`, for example `--computed-series Delta:difference`.
+
 Basic displays can choose a starter **View layout**: `text`, `form`, `list`, `table`, or `blank`. List and table layouts automatically generate the starter item collection required by their bindings. Use `--behavior basic --layout table` from the CLI.
 
 The basic `form` layout automatically creates a labeled WPF editor for every configured display property. Boolean properties use checkboxes; strings, integers, and numbers use text boxes with immediate binding updates.

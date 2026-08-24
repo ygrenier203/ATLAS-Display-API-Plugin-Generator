@@ -24,6 +24,8 @@ from tools.PluginGenerator.gui import (
     build_item_field_spec,
     build_item_members,
     build_generation_summary,
+    build_computed_series_spec,
+    build_computed_series_blocks,
     build_session_notification_hooks,
     build_display_property,
     build_display_property_field,
@@ -55,6 +57,18 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('double.IsNaN', renderer)
         self.assertIn('IReadOnlyList<long> Timestamps', series)
         self.assertIn('IReadOnlyList<double> Values', series)
+
+    def test_computed_series_supports_common_operations(self):
+        specs = [
+            build_computed_series_spec('Delta:difference'),
+            build_computed_series_spec('Mean:average'),
+            build_computed_series_spec('Ratio:ratio'),
+        ]
+        source = build_computed_series_blocks(specs)
+
+        self.assertIn('first.Values[index] - second.Values[index]', source)
+        self.assertIn('/ 2d', source)
+        self.assertIn('SafeRatio(', source)
 
     def test_deployed_plugin_discovery_excludes_built_in_plugins(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -494,6 +508,20 @@ class GenerationTests(unittest.TestCase):
     def test_time_graph_requires_visible_range_behavior(self):
         with self.assertRaisesRegex(ValueError, 'require a visible-range behavior'):
             self.generate(include_parameters=False, graph_type='time-series')
+
+    def test_time_graph_can_generate_computed_series(self):
+        target = self.generate(
+            behavior=BEHAVIOR_VISIBLE_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            graph_type='time-series',
+            computed_series_specs=[build_computed_series_spec('Difference:difference')],
+        )
+        project = target / 'SeparationPlugin'
+        factory = (project / 'ComputedGraphSeriesFactory.cs').read_text(encoding='utf-8')
+        codebehind = (project / 'SeparationPluginView.xaml.cs').read_text(encoding='utf-8')
+
+        self.assertIn('"Difference"', factory)
+        self.assertIn('ComputedGraphSeriesFactory.Create', codebehind)
 
     def test_collection_names_and_item_fields_are_configurable(self):
         target = self.generate(

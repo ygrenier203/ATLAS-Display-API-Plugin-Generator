@@ -1140,6 +1140,34 @@ namespace {namespace}
 }}
 '''
 
+COMPUTED_GRAPH_SERIES_TEMPLATE = '''using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public static class ComputedGraphSeriesFactory
+    {{
+        public static IEnumerable<GraphSeries> Create(IReadOnlyList<GraphSeries> source)
+        {{
+            if (source.Count < 2)
+            {{
+                yield break;
+            }}
+
+            var first = source[0];
+            var second = source[1];
+            var count = Math.Min(first.Values.Count, second.Values.Count);
+{computed_blocks}
+        }}
+
+        private static double SafeRatio(double left, double right) =>
+            Math.Abs(right) < double.Epsilon ? double.NaN : left / right;
+    }}
+}}
+'''
+
 VIEW_XAML_HEADER = '''<UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -1989,6 +2017,7 @@ namespace {namespace}
                 item.Timestamps,
                 item.Values,
                 Palette[index % Palette.Length])).ToList() ?? new List<GraphSeries>();
+{computed_series_update}
             visual.Draw(context => this.graphRenderer.Draw(context, visual.Extents, series));
             var cursorVisual = this.CursorVisualLayer.Visual;
             var cursorTimestamp = this.viewModel?.Series.Select(item => item.CurrentTimestamp).FirstOrDefault(value => value.HasValue);
@@ -2012,6 +2041,34 @@ def build_item_field_spec(value):
     if property_type not in DISPLAY_PROPERTY_TYPES.values():
         raise ValueError(f'Unsupported item field type: {property_type}')
     return {'name': name, 'type': property_type}
+
+
+def build_computed_series_spec(value):
+    parts = [part.strip() for part in str(value or '').split(':', 1)]
+    if len(parts) != 2 or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_ ]*', parts[0]):
+        raise ValueError('Computed series must use Name:operation.')
+    operation = parts[1].lower()
+    if operation not in ('difference', 'sum', 'average', 'ratio'):
+        raise ValueError(f'Unsupported computed series operation: {operation}')
+    return {'name': parts[0], 'operation': operation}
+
+
+def build_computed_series_blocks(specs):
+    expressions = {
+        'difference': 'first.Values[index] - second.Values[index]',
+        'sum': 'first.Values[index] + second.Values[index]',
+        'average': '(first.Values[index] + second.Values[index]) / 2d',
+        'ratio': 'SafeRatio(first.Values[index], second.Values[index])',
+    }
+    blocks = []
+    for spec in specs:
+        name = escape_csharp_string(spec['name'])
+        expression = expressions[spec['operation']]
+        blocks.append(
+            f'            yield return new GraphSeries("{name}", first.Timestamps.Take(count).ToArray(),\n'
+            f'                Enumerable.Range(0, count).Select(index => {expression}).ToArray(), Colors.White);'
+        )
+    return '\n'.join(blocks)
 
 
 def build_item_members(field_specs):
@@ -2100,7 +2157,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     include_status_state=False, include_lifecycle_hooks=False,
                     include_session_notifications=False, include_item_collection=False,
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
-                    item_field_specs=None, graph_type='none', dll_specs=None, atlas_install_directory=None):
+                    item_field_specs=None, graph_type='none', computed_series_specs=None, dll_specs=None, atlas_install_directory=None):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -2115,6 +2172,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     atlas_parameters = validated_atlas_parameters
     display_property_specs = list(display_property_specs or [])
     command_specs = list(command_specs or [])
+    computed_series_specs = list(computed_series_specs or [])
     dll_specs = normalize_dll_specs(dll_specs)
     validate_display_property_actions(display_property_specs, behavior)
     if atlas_parameters and not include_parameters:
@@ -2129,6 +2187,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError(f'Unknown graph type: {graph_type}')
     if graph_type != 'none' and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         raise ValueError('Time-series graphs require a visible-range behavior.')
+    if computed_series_specs and graph_type == 'none':
+        raise ValueError('Computed series require a graph.')
     if include_item_collection and basic_layout == 'text':
         basic_layout = 'list'
     include_item_collection = include_item_collection or basic_layout in ('list', 'table')
@@ -2337,6 +2397,11 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         if graph_type == 'time-series':
             files['GraphSeries.cs'] = GRAPH_SERIES_TEMPLATE.format(namespace=namespace)
             files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
+            if computed_series_specs:
+                files['ComputedGraphSeriesFactory.cs'] = COMPUTED_GRAPH_SERIES_TEMPLATE.format(
+                    namespace=namespace,
+                    computed_blocks=build_computed_series_blocks(computed_series_specs),
+                )
     elif behavior == BEHAVIOR_COMPARE_SESSIONS:
         files['CompareRowViewModel.cs'] = COMPARE_ROW_VIEWMODEL_TEMPLATE.format(namespace=namespace)
         files['CompareSessionValueViewModel.cs'] = COMPARE_SESSION_VALUE_VIEWMODEL_TEMPLATE.format(
@@ -2368,6 +2433,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             namespace=namespace,
             view_class=f'{name}View',
             viewmodel_class=f'{name}ViewModel',
+            computed_series_update=(
+                '            series.AddRange(ComputedGraphSeriesFactory.Create(series).ToList());'
+                if computed_series_specs else ''
+            ),
         )
 
     for filename, content in files.items():
@@ -2728,6 +2797,10 @@ class PluginGeneratorApp(tk.Tk):
             width=22,
         )
         self.graph_type_combo.grid(row=10, column=1, sticky='w', padx=8)
+        tk.Label(advanced_frame, text='Computed series (Name:operation):').grid(row=11, column=0, sticky='w', pady=4)
+        self.computed_series_var = tk.StringVar(value='')
+        self.computed_series_entry = tk.Entry(advanced_frame, textvariable=self.computed_series_var, width=36)
+        self.computed_series_entry.grid(row=11, column=1, sticky='ew', padx=8)
         
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
@@ -3229,6 +3302,7 @@ class PluginGeneratorApp(tk.Tk):
         self.item_class_name_var.set('ItemViewModel')
         self.item_fields_var.set('Name:string')
         self.graph_type_var.set('none')
+        self.computed_series_var.set('')
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
@@ -3292,6 +3366,7 @@ class PluginGeneratorApp(tk.Tk):
             'item_class_name': self.item_class_name_var.get(),
             'item_fields': self.item_fields_var.get(),
             'graph_type': self.graph_type_var.get(),
+            'computed_series': self.computed_series_var.get(),
         }
 
     def apply_preset_configuration(self, configuration):
@@ -3320,6 +3395,7 @@ class PluginGeneratorApp(tk.Tk):
         self.item_class_name_var.set(configuration.get('item_class_name', 'ItemViewModel'))
         self.item_fields_var.set(configuration.get('item_fields', 'Name:string'))
         self.graph_type_var.set(configuration.get('graph_type', 'none'))
+        self.computed_series_var.set(configuration.get('computed_series', ''))
         self.update_behavior_states()
 
     def save_preset_dialog(self):
@@ -3375,6 +3451,11 @@ class PluginGeneratorApp(tk.Tk):
                 for value in self.item_fields_var.get().split(',')
                 if value.strip()
             ]
+            computed_series_specs = [
+                build_computed_series_spec(value)
+                for value in self.computed_series_var.get().split(',')
+                if value.strip()
+            ]
             if atlas_parameters and not include_parameters:
                 raise ValueError('ATLAS parameters require Current value or Visible range behavior.')
             service_names = [name for name, var in self.service_vars.items() if var.get()]
@@ -3418,6 +3499,7 @@ class PluginGeneratorApp(tk.Tk):
                 item_class_name=self.item_class_name_var.get().strip(),
                 item_field_specs=item_field_specs,
                 graph_type=self.graph_type_var.get(),
+                computed_series_specs=computed_series_specs,
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,
