@@ -1098,7 +1098,7 @@ namespace {namespace}
 
             if (GraphType == "custom")
             {{
-                this.DrawCustom(drawingContext, extents, validSeries);
+                new CustomGraphRenderer().Draw(drawingContext, extents, validSeries);
                 return;
             }}
 
@@ -1224,9 +1224,22 @@ namespace {namespace}
             }}
         }}
 
-        private void DrawCustom(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+    }}
+}}
+'''
+
+CUSTOM_GRAPH_RENDERER_TEMPLATE = '''using System.Collections.Generic;
+using System.Windows;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public sealed class CustomGraphRenderer
+    {{
+        public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
         {{
-            // TODO: Draw a custom graph using drawingContext, extents, and series.
+            // TODO: Draw any custom visualization using the supplied series and WPF DrawingContext.
+            // Example: drawingContext.DrawLine(new Pen(Brushes.DeepSkyBlue, 2), start, end);
         }}
     }}
 }}
@@ -2491,6 +2504,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace).replace(
                 '__GRAPH_TYPE__', graph_type
             )
+            if graph_type == 'custom':
+                files['CustomGraphRenderer.cs'] = CUSTOM_GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
             if computed_series_specs:
                 files['ComputedGraphSeriesFactory.cs'] = COMPUTED_GRAPH_SERIES_TEMPLATE.format(
                     namespace=namespace,

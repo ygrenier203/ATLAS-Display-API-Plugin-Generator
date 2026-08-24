@@ -542,6 +542,20 @@ class GenerationTests(unittest.TestCase):
                 self.assertIn(f'GraphType = "{graph_type}"', renderer)
                 self.assertIn(expected, renderer)
 
+    def test_custom_graph_generates_isolated_renderer_extension(self):
+        target = self.generate(
+            behavior=BEHAVIOR_VISIBLE_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            graph_type='custom',
+        )
+        project = target / 'SeparationPlugin'
+        custom = (project / 'CustomGraphRenderer.cs').read_text(encoding='utf-8')
+        renderer = (project / 'GraphRenderer.cs').read_text(encoding='utf-8')
+
+        self.assertIn('public sealed class CustomGraphRenderer', custom)
+        self.assertIn('TODO: Draw any custom visualization', custom)
+        self.assertIn('new CustomGraphRenderer().Draw', renderer)
+
     def test_collection_names_and_item_fields_are_configurable(self):
         target = self.generate(
             include_parameters=False,

@@ -93,6 +93,8 @@ Computed traces can combine the first two raw graph series using `difference`, `
 
 Graph modes also include `scatter` (first parameter on X, second on Y), `histogram` (distribution buckets for the first parameter), and `bar` (one average-value bar per series). Each mode uses the same visible-range request and statistics pipeline.
 
+Select `custom` when the standard renderers do not fit. The generator creates a separate `CustomGraphRenderer.cs` with a `DrawingContext`, graph extents, and all requested series ready for arbitrary native WPF drawing.
+
 Basic displays can choose a starter **View layout**: `text`, `form`, `list`, `table`, or `blank`. List and table layouts automatically generate the starter item collection required by their bindings. Use `--behavior basic --layout table` from the CLI.
 
 The basic `form` layout automatically creates a labeled WPF editor for every configured display property. Boolean properties use checkboxes; strings, integers, and numbers use text boxes with immediate binding updates.
