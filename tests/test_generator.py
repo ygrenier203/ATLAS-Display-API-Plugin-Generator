@@ -523,6 +523,25 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('"Difference"', factory)
         self.assertIn('ComputedGraphSeriesFactory.Create', codebehind)
 
+    def test_graph_renderer_modes_generate_native_drawing_code(self):
+        expectations = {
+            'scatter': 'DrawScatter(',
+            'histogram': 'DrawHistogram(',
+            'bar': 'DrawBars(',
+        }
+        for graph_type, expected in expectations.items():
+            with self.subTest(graph_type=graph_type):
+                target = self.generate(
+                    behavior=BEHAVIOR_VISIBLE_RANGE,
+                    library_project=str(LIBRARY_PROJECT),
+                    graph_type=graph_type,
+                )
+                renderer = (
+                    target / 'SeparationPlugin' / 'GraphRenderer.cs'
+                ).read_text(encoding='utf-8')
+                self.assertIn(f'GraphType = "{graph_type}"', renderer)
+                self.assertIn(expected, renderer)
+
     def test_collection_names_and_item_fields_are_configurable(self):
         target = self.generate(
             include_parameters=False,

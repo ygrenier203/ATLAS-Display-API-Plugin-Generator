@@ -40,7 +40,7 @@ def run(args=None):
 	parser.add_argument('--collection-name', default='Items', help='starter collection property name')
 	parser.add_argument('--item-class', default='ItemViewModel', help='starter collection item class name')
 	parser.add_argument('--item-field', action='append', default=[], help='item field as Name:type; repeat for multiple fields')
-	parser.add_argument('--graph', choices=('none', 'time-series'), default='none', help='graph renderer for visible-range data')
+	parser.add_argument('--graph', choices=('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'), default='none', help='graph renderer for visible-range data')
 	parser.add_argument('--computed-series', action='append', default=[], help='computed trace as Name:operation')
 	parser.add_argument('--clear-settings', action='store_true', help='clear persisted paths used by the generator and exit')
 	options = parser.parse_args(args)

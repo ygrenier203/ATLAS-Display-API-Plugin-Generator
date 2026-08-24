@@ -1054,6 +1054,8 @@ namespace {namespace}
 {{
     public sealed class GraphRenderer
     {{
+        private const string GraphType = "__GRAPH_TYPE__";
+
         public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
         {{
             drawingContext.DrawRectangle(Brushes.Transparent, new Pen(Brushes.DimGray, 1), new Rect(extents));
@@ -1073,6 +1075,30 @@ namespace {namespace}
             var validSeries = series.Where(item => item.Timestamps.Count > 1 && item.Values.Count > 1).ToList();
             if (validSeries.Count == 0)
             {{
+                return;
+            }}
+
+            if (GraphType == "scatter")
+            {{
+                this.DrawScatter(drawingContext, extents, validSeries);
+                return;
+            }}
+
+            if (GraphType == "histogram")
+            {{
+                this.DrawHistogram(drawingContext, extents, validSeries[0]);
+                return;
+            }}
+
+            if (GraphType == "bar")
+            {{
+                this.DrawBars(drawingContext, extents, validSeries);
+                return;
+            }}
+
+            if (GraphType == "custom")
+            {{
+                this.DrawCustom(drawingContext, extents, validSeries);
                 return;
             }}
 
@@ -1135,6 +1161,72 @@ namespace {namespace}
 
                 previous = point;
             }}
+        }}
+
+        private void DrawScatter(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            if (series.Count < 2)
+            {{
+                return;
+            }}
+
+            var count = Math.Min(series[0].Values.Count, series[1].Values.Count);
+            var points = Enumerable.Range(0, count)
+                .Select(index => new {{ X = series[0].Values[index], Y = series[1].Values[index] }})
+                .Where(point => !double.IsNaN(point.X) && !double.IsNaN(point.Y)).ToList();
+            if (points.Count == 0) return;
+            var minX = points.Min(point => point.X);
+            var minY = points.Min(point => point.Y);
+            var rangeX = Math.Max(double.Epsilon, points.Max(point => point.X) - minX);
+            var rangeY = Math.Max(double.Epsilon, points.Max(point => point.Y) - minY);
+            foreach (var point in points)
+            {{
+                var x = ((point.X - minX) / rangeX) * extents.Width;
+                var y = extents.Height - (((point.Y - minY) / rangeY) * extents.Height);
+                drawingContext.DrawEllipse(Brushes.DeepSkyBlue, null, new Point(x, y), 2, 2);
+            }}
+        }}
+
+        private void DrawHistogram(DrawingContext drawingContext, Size extents, GraphSeries series)
+        {{
+            var values = series.Values.Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToList();
+            if (values.Count == 0) return;
+            const int bucketCount = 20;
+            var minimum = values.Min();
+            var range = Math.Max(double.Epsilon, values.Max() - minimum);
+            var buckets = new int[bucketCount];
+            foreach (var value in values)
+            {{
+                var bucket = Math.Min(bucketCount - 1, (int)(((value - minimum) / range) * bucketCount));
+                buckets[bucket]++;
+            }}
+
+            var maximumCount = Math.Max(1, buckets.Max());
+            var width = extents.Width / bucketCount;
+            for (var index = 0; index < bucketCount; index++)
+            {{
+                var height = (buckets[index] / (double)maximumCount) * extents.Height;
+                drawingContext.DrawRectangle(Brushes.DeepSkyBlue, null,
+                    new Rect(index * width, extents.Height - height, Math.Max(1, width - 1), height));
+            }}
+        }}
+
+        private void DrawBars(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            var averages = series.Select(item => item.Values.Where(value => !double.IsNaN(value)).DefaultIfEmpty().Average()).ToList();
+            var maximum = Math.Max(double.Epsilon, averages.Select(Math.Abs).DefaultIfEmpty(1).Max());
+            var width = extents.Width / Math.Max(1, averages.Count);
+            for (var index = 0; index < averages.Count; index++)
+            {{
+                var height = (Math.Abs(averages[index]) / maximum) * extents.Height;
+                drawingContext.DrawRectangle(new SolidColorBrush(series[index].Color), null,
+                    new Rect(index * width, extents.Height - height, Math.Max(1, width - 4), height));
+            }}
+        }}
+
+        private void DrawCustom(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            // TODO: Draw a custom graph using drawingContext, extents, and series.
         }}
     }}
 }}
@@ -2183,7 +2275,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError(f'Unknown basic view layout: {basic_layout}')
     if behavior != BEHAVIOR_BASIC and basic_layout != 'text':
         raise ValueError('View layout selection is only available for basic displays.')
-    if graph_type not in ('none', 'time-series'):
+    if graph_type not in ('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'):
         raise ValueError(f'Unknown graph type: {graph_type}')
     if graph_type != 'none' and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         raise ValueError('Time-series graphs require a visible-range behavior.')
@@ -2283,7 +2375,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         view_template = VIEW_XAML_TEMPLATE
     elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         viewmodel_template = TIMEBASE_VIEWMODEL_TEMPLATE
-        view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if graph_type == 'time-series' else TIMEBASE_VIEW_XAML_TEMPLATE
+        view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if graph_type != 'none' else TIMEBASE_VIEW_XAML_TEMPLATE
     elif behavior == BEHAVIOR_COMPARE_SESSIONS:
         viewmodel_template = COMPARE_VIEWMODEL_TEMPLATE
         view_template = COMPARE_VIEW_XAML_TEMPLATE
@@ -2394,9 +2486,11 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             current_value_property=CURRENT_VALUE_PROPERTY if include_current_value else '',
             current_value_update_method=CURRENT_VALUE_UPDATE_METHOD if include_current_value else '',
         )
-        if graph_type == 'time-series':
+        if graph_type != 'none':
             files['GraphSeries.cs'] = GRAPH_SERIES_TEMPLATE.format(namespace=namespace)
-            files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
+            files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace).replace(
+                '__GRAPH_TYPE__', graph_type
+            )
             if computed_series_specs:
                 files['ComputedGraphSeriesFactory.cs'] = COMPUTED_GRAPH_SERIES_TEMPLATE.format(
                     namespace=namespace,
@@ -2428,7 +2522,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 item_field_specs[0]['name'],
             ),
         )
-        codebehind_template = GRAPH_VIEW_CODEBEHIND_TEMPLATE if graph_type == 'time-series' else VIEW_CODEBEHIND_TEMPLATE
+        codebehind_template = GRAPH_VIEW_CODEBEHIND_TEMPLATE if graph_type != 'none' else VIEW_CODEBEHIND_TEMPLATE
         files[f'{name}View.xaml.cs'] = codebehind_template.format(
             namespace=namespace,
             view_class=f'{name}View',
@@ -2792,7 +2886,7 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_type_combo = ttk.Combobox(
             advanced_frame,
             textvariable=self.graph_type_var,
-            values=('none', 'time-series'),
+            values=('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'),
             state='disabled',
             width=22,
         )
