@@ -30,6 +30,62 @@ def load_preset(path):
     return configuration
 
 
+def build_generation_summary(name, behavior, include_view, atlas_parameters, display_property_specs,
+                             command_specs, service_names, basic_layout='text', include_status_state=False,
+                             include_lifecycle_hooks=False, include_session_notifications=False,
+                             include_item_collection=False, collection_name='Items',
+                             item_class_name='ItemViewModel', item_field_specs=None):
+    plugin_name = normalize_plugin_name(name)
+    files = [
+        f'{plugin_name}.sln',
+        f'{plugin_name}/{plugin_name}.csproj',
+        f'{plugin_name}/PluginModule.cs',
+        f'{plugin_name}/{plugin_name}ViewModel.cs',
+        f'{plugin_name}/Properties/AssemblyInfo.cs',
+        f'{plugin_name}/Resources/<selected icon>',
+    ]
+    if include_view:
+        files.extend([f'{plugin_name}/{plugin_name}View.xaml', f'{plugin_name}/{plugin_name}View.xaml.cs'])
+    if behavior == BEHAVIOR_CURRENT_VALUE:
+        files.append(f'{plugin_name}/ParameterViewModel.cs')
+    elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
+        files.append(f'{plugin_name}/TimebaseSeriesViewModel.cs')
+    elif behavior == BEHAVIOR_COMPARE_SESSIONS:
+        files.extend([
+            f'{plugin_name}/CompareRowViewModel.cs',
+            f'{plugin_name}/CompareSessionValueViewModel.cs',
+        ])
+    uses_collection = include_item_collection or (behavior == BEHAVIOR_BASIC and basic_layout in ('list', 'table'))
+    if uses_collection:
+        files.append(f'{plugin_name}/{item_class_name}.cs')
+
+    features = []
+    if include_status_state:
+        features.append('loading/status/error state')
+    if include_lifecycle_hooks:
+        features.append('lifecycle hooks')
+    if include_session_notifications:
+        features.append('session notification hooks')
+    if uses_collection:
+        fields = ', '.join(f'{spec["name"]}:{spec["type"]}' for spec in (item_field_specs or [])) or 'Name:string'
+        features.append(f'collection {collection_name}<{item_class_name}> ({fields})')
+
+    lines = [
+        f'Plugin: {plugin_name}',
+        f'Behavior: {behavior}',
+        f'View: {"yes" if include_view else "no"}' + (f' ({basic_layout})' if behavior == BEHAVIOR_BASIC else ''),
+        f'ATLAS parameters: {len(atlas_parameters)}',
+        f'Display properties: {len(display_property_specs)}',
+        f'Commands: {len(command_specs)}',
+        f'Injected services: {", ".join(service_names) if service_names else "none"}',
+        f'Optional features: {", ".join(features) if features else "none"}',
+        '',
+        'Files:',
+        *[f'  - {path}' for path in files],
+    ]
+    return '\n'.join(lines)
+
+
 CS_PROJ_TEMPLATE = r'''<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net8.0-windows</TargetFramework>
@@ -2601,6 +2657,25 @@ class PluginGeneratorApp(tk.Tk):
             if atlas_parameters and not include_parameters:
                 raise ValueError('ATLAS parameters require Current value or Visible range behavior.')
             service_names = [name for name, var in self.service_vars.items() if var.get()]
+            summary = build_generation_summary(
+                name,
+                self.behavior_var.get(),
+                self.add_view_var.get(),
+                atlas_parameters,
+                display_property_specs,
+                command_specs,
+                service_names,
+                basic_layout=self.basic_layout_var.get(),
+                include_status_state=self.status_state_var.get(),
+                include_lifecycle_hooks=self.lifecycle_hooks_var.get(),
+                include_session_notifications=self.session_notifications_var.get(),
+                include_item_collection=self.item_collection_var.get(),
+                collection_name=self.collection_name_var.get().strip(),
+                item_class_name=self.item_class_name_var.get().strip(),
+                item_field_specs=item_field_specs,
+            )
+            if not messagebox.askokcancel('Generation Preview', summary):
+                return
             os.makedirs(base_out, exist_ok=True)
             target = generate_plugin(
                 name,

@@ -71,6 +71,8 @@ The collection property name, item class name, and typed item fields are configu
 
 Use **Save Preset** and **Load Preset** to reuse a generator configuration as a versioned JSON file. Presets include plugin behavior, layout, ATLAS parameters, display properties, commands, services, lifecycle options, and collection settings; machine-specific output, library, and icon paths remain separate.
 
+Before writing any plugin files, the GUI displays a **Generation Preview** with the selected behavior, layout, feature counts, injected services, optional helpers, collection shape, and expected file list. Cancel the preview to return to the form without creating the output directory.
+
 Basic displays can choose a starter **View layout**: `text`, `form`, `list`, `table`, or `blank`. List and table layouts automatically generate the starter item collection required by their bindings. Use `--behavior basic --layout table` from the CLI.
 
 The basic `form` layout automatically creates a labeled WPF editor for every configured display property. Boolean properties use checkboxes; strings, integers, and numbers use text boxes with immediate binding updates.

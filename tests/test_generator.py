@@ -23,6 +23,7 @@ from tools.PluginGenerator.gui import (
     build_property_control,
     build_item_field_spec,
     build_item_members,
+    build_generation_summary,
     build_session_notification_hooks,
     build_display_property,
     build_display_property_field,
@@ -40,6 +41,28 @@ ICON = ROOT / 'icon.png'
 
 
 class ParameterAndPropertyTests(unittest.TestCase):
+    def test_generation_summary_lists_features_and_files(self):
+        summary = build_generation_summary(
+            'Demo',
+            BEHAVIOR_BASIC,
+            True,
+            [],
+            [build_display_property_spec('Title')],
+            [build_command_spec('Refresh')],
+            ['ISessionService'],
+            basic_layout='table',
+            include_lifecycle_hooks=True,
+            item_class_name='ReadingViewModel',
+            item_field_specs=[build_item_field_spec('Value:double')],
+        )
+
+        self.assertIn('Plugin: DemoPlugin', summary)
+        self.assertIn('View: yes (table)', summary)
+        self.assertIn('Display properties: 1', summary)
+        self.assertIn('Commands: 1', summary)
+        self.assertIn('lifecycle hooks', summary)
+        self.assertIn('DemoPlugin/ReadingViewModel.cs', summary)
+
     def test_preset_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'plugin.json'
