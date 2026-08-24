@@ -2,6 +2,7 @@ import os
 import re
 import json
 import math
+import html
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import shutil
@@ -131,9 +132,11 @@ VIEWMODEL_TEMPLATE = '''using DisplayPluginLibrary;
 using MAT.Atlas.Api.Core.Diagnostics;
 using MAT.Atlas.Api.Core.Signals;
 using MAT.Atlas.Client.Platform.Data;
+using MAT.Atlas.Client.Presentation.Commands;
 using MAT.Atlas.Client.Presentation.Plugins;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Windows.Input;
 using System.Windows.Media;
 {extra_usings}
 namespace {namespace}
@@ -148,19 +151,24 @@ namespace {namespace}
             ILogger logger{extra_ctor_params}) :
             base(signalBus, dataRequestSignalFactory, logger)
         {{
-{extra_ctor_assignments}        }}
+{extra_ctor_assignments}{command_initializers}        }}
 
 {display_properties}
+{command_properties}
     {atlas_parameter_setup}
         protected override ParameterViewModel OnCreateParameterViewModel() => new ParameterViewModel();
+
+{command_handlers}
     }}
 }}
 '''
 
 BASIC_VIEWMODEL_TEMPLATE = '''using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
+using System.Windows.Input;
 
 {extra_usings}using MAT.Atlas.Client.Presentation.Displays;
+using MAT.Atlas.Client.Presentation.Commands;
 using MAT.Atlas.Client.Presentation.Plugins;
 
 namespace {namespace}
@@ -170,7 +178,9 @@ namespace {namespace}
     {{
 {display_property_fields}
 {service_members}
-{display_properties}    }}
+{display_properties}
+{command_properties}
+{command_handlers}    }}
 }}
 '''
 
@@ -188,7 +198,9 @@ using MAT.Atlas.Api.Core.Signals;
 using MAT.Atlas.Client.Platform.Data;
 using MAT.Atlas.Client.Platform.Data.Signals;
 using MAT.Atlas.Client.Platform.Sessions;
+using MAT.Atlas.Client.Presentation.Commands;
 using MAT.Atlas.Client.Presentation.Plugins;
+using System.Windows.Input;
 {extra_usings}
 namespace {namespace}
 {{
@@ -207,7 +219,7 @@ namespace {namespace}
                 this.HandleDataResultSignal,
                 signal => signal.SourceId == this.ScopeIdentity.Guid));
 {cursor_subscription}
-{extra_ctor_assignments}        }}
+{extra_ctor_assignments}{command_initializers}        }}
 
         [Category("Data")]
         [DisplayName("Sample Count")]
@@ -231,6 +243,7 @@ namespace {namespace}
             new ObservableCollection<TimebaseSeriesViewModel>();
 
 {display_properties}
+{command_properties}
     {atlas_parameter_setup}
         protected override async Task OnMakeTimebaseDataRequestsAsync(ICompositeSession compositeSession)
         {{
@@ -302,6 +315,8 @@ namespace {namespace}
                 }}
             }}
         }}
+
+{command_handlers}
     }}
 }}
 '''
@@ -482,7 +497,9 @@ using MAT.Atlas.Api.Core.Signals;
 using MAT.Atlas.Client.Platform.Data;
 using MAT.Atlas.Client.Platform.Data.Signals;
 using MAT.Atlas.Client.Platform.Sessions;
+using MAT.Atlas.Client.Presentation.Commands;
 using MAT.Atlas.Client.Presentation.Plugins;
+using System.Windows.Input;
 {extra_usings}
 namespace {namespace}
 {{
@@ -499,13 +516,14 @@ namespace {namespace}
             this.Disposables.Add(this.SignalBus.Subscribe<CompositeSampleResultSignal>(
                 this.HandleCompositeSampleResultSignal,
                 signal => signal.SourceId == this.ScopeIdentity.Guid));
-{extra_ctor_assignments}        }}
+{extra_ctor_assignments}{command_initializers}        }}
 
         [Browsable(false)]
         public ObservableCollection<CompareRowViewModel> Rows {{ get; }} =
             new ObservableCollection<CompareRowViewModel>();
 
 {display_properties}
+{command_properties}
     {atlas_parameter_setup}
         protected override async Task OnMakeCursorDataRequestsAsync(ICompositeSession compositeSession)
         {{
@@ -588,6 +606,8 @@ namespace {namespace}
                 this.Rows.Add(row);
             }}
         }}
+
+{command_handlers}
     }}
 }}
 '''
@@ -753,7 +773,10 @@ VIEW_XAML_HEADER = '''<UserControl xmlns="http://schemas.microsoft.com/winfx/200
 VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
              x:Class="{namespace}.{view_class}">
     <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-        <ItemsControl ItemsSource="{{Binding Parameters}}">
+        <DockPanel>
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+{command_buttons}            </StackPanel>
+            <ItemsControl ItemsSource="{{Binding Parameters}}">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
                     <UniformGrid Columns="2" />
@@ -788,11 +811,15 @@ using System.Runtime.InteropServices;
 BASIC_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
              x:Class="{namespace}.{view_class}">
     <Grid>
-        <TextBlock Text="{view_class}"
+        <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="4">
+{command_buttons}            </StackPanel>
+            <TextBlock Text="{view_class}"
                    VerticalAlignment="Center"
                    HorizontalAlignment="Center"
                    Foreground="White"
                    FontSize="20" />
+        </StackPanel>
     </Grid>
 </UserControl>
 '''
@@ -800,7 +827,10 @@ BASIC_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
 TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
              x:Class="{namespace}.{view_class}">
     <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-        <ItemsControl ItemsSource="{{Binding Series}}">
+        <DockPanel>
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+{command_buttons}            </StackPanel>
+            <ItemsControl ItemsSource="{{Binding Series}}">
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
                     <Border BorderBrush="DarkGray" BorderThickness="1" Padding="12" Margin="4">
@@ -814,7 +844,8 @@ TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                     </Border>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
-        </ItemsControl>
+            </ItemsControl>
+        </DockPanel>
     </ScrollViewer>
 </UserControl>
 '''
@@ -822,7 +853,10 @@ TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
 COMPARE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
              x:Class="{namespace}.{view_class}">
     <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-        <ItemsControl ItemsSource="{{Binding Rows}}">
+        <DockPanel>
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+{command_buttons}            </StackPanel>
+            <ItemsControl ItemsSource="{{Binding Rows}}">
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
                     <Border BorderBrush="DarkGray" BorderThickness="1" Padding="12" Margin="4">
@@ -848,7 +882,8 @@ COMPARE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                     </Border>
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
-        </ItemsControl>
+            </ItemsControl>
+        </DockPanel>
     </ScrollViewer>
 </UserControl>
 '''
@@ -1179,8 +1214,8 @@ def build_service_fields(entries):
     return ''.join(f'        private readonly {entry["interface"]} {entry["param"]};\n' for entry in entries)
 
 
-def build_basic_service_members(viewmodel_class, entries):
-    if not entries:
+def build_basic_service_members(viewmodel_class, entries, command_initializers=''):
+    if not entries and not command_initializers:
         return ''
     fields = build_service_fields(entries)
     params = ',\n'.join(f'            {entry["interface"]} {entry["param"]}' for entry in entries)
@@ -1191,6 +1226,7 @@ def build_basic_service_members(viewmodel_class, entries):
         f'{params})\n'
         '        {\n'
         f'{assignments}'
+        f'{command_initializers}'
         '        }\n'
     )
 
@@ -1286,8 +1322,57 @@ def build_generated_plugin(target, build_tool=None):
     return result.stdout
 
 
+def command_display_label(name):
+    return re.sub(r'(?<!^)(?=[A-Z])', ' ', name)
+
+
+def build_command_spec(name, button_label='', include_button=True, existing_names=None):
+    name = (name or '').strip()
+    if name.endswith('Command'):
+        name = name[:-len('Command')]
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
+        raise ValueError('Command name must be a valid C# identifier.')
+    if existing_names and name in existing_names:
+        raise ValueError(f'A command named "{name}" already exists.')
+    return {
+        'name': name,
+        'button_label': (button_label or '').strip() or command_display_label(name),
+        'include_button': bool(include_button),
+    }
+
+
+def build_command_property(spec):
+    return (
+        '        [Browsable(false)]\n'
+        f'        public ICommand {spec["name"]}Command {{ get; }}\n'
+    )
+
+
+def build_command_initializer(spec):
+    return f'            this.{spec["name"]}Command = new DelegateCommand(this.On{spec["name"]});\n'
+
+
+def build_command_handler(spec):
+    return (
+        f'        private void On{spec["name"]}()\n'
+        '        {\n'
+        f'            // TODO: Implement {spec["name"]}.\n'
+        '        }\n'
+    )
+
+
+def build_command_button(spec):
+    if not spec['include_button']:
+        return ''
+    label = html.escape(spec['button_label'], quote=True)
+    return (
+        f'            <Button Content="{label}" Command="{{Binding {spec["name"]}Command}}" '
+        'Margin="0,0,8,0" Padding="10,4" />\n'
+    )
+
+
 def generate_plugin(name, base_out, include_view=True, include_parameters=True, behavior=None, atlas_parameters=None,
-                    display_property_specs=None, parameter_max_count=100, workspace_root=None,
+                    display_property_specs=None, command_specs=None, parameter_max_count=100, workspace_root=None,
                     description=None, library_project=None, icon_path=None, service_names=None):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
@@ -1302,6 +1387,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         existing_atlas_parameters.add(validated_identifier)
     atlas_parameters = validated_atlas_parameters
     display_property_specs = list(display_property_specs or [])
+    command_specs = list(command_specs or [])
     validate_display_property_actions(display_property_specs, behavior)
     if atlas_parameters and not include_parameters:
         raise ValueError('ATLAS parameters require a data behavior.')
@@ -1410,13 +1496,21 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     extra_ctor_params = ''
     extra_ctor_assignments = ''
     service_members = ''
+    command_properties = '\n'.join(build_command_property(spec) for spec in command_specs)
+    command_initializers = ''.join(build_command_initializer(spec) for spec in command_specs)
+    command_handlers = '\n'.join(build_command_handler(spec) for spec in command_specs)
+    command_buttons = ''.join(build_command_button(spec) for spec in command_specs)
     if include_parameters:
         extra_service_fields = build_service_fields(service_entries)
         display_property_fields = '\n'.join(filter(None, [display_property_fields, extra_service_fields]))
         extra_ctor_params = ''.join(f',\n            {entry["interface"]} {entry["param"]}' for entry in service_entries)
         extra_ctor_assignments = ''.join(f'            this.{entry["param"]} = {entry["param"]};\n' for entry in service_entries)
     else:
-        service_members = build_basic_service_members(f'{name}ViewModel', service_entries)
+        service_members = build_basic_service_members(
+            f'{name}ViewModel',
+            service_entries,
+            command_initializers,
+        )
 
     files = {
         f'{name}.csproj': csproj,
@@ -1446,6 +1540,9 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             cursor_subscription=CURSOR_SUBSCRIPTION if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
             cursor_request_method=CURSOR_REQUEST_METHOD if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
             cursor_result_handler=CURSOR_RESULT_HANDLER if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
+            command_properties=command_properties,
+            command_initializers=command_initializers,
+            command_handlers=command_handlers,
         ),
     }
     if behavior == BEHAVIOR_CURRENT_VALUE:
@@ -1468,6 +1565,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             namespace=namespace,
             view_class=f'{name}View',
             current_value_text=(CURRENT_VALUE_TEXT if behavior == BEHAVIOR_CURRENT_AND_RANGE else ''),
+            command_buttons=command_buttons,
         )
         files[f'{name}View.xaml.cs'] = VIEW_CODEBEHIND_TEMPLATE.format(
             namespace=namespace,
@@ -1674,6 +1772,37 @@ class PluginGeneratorApp(tk.Tk):
         tk.Button(property_button_frame, text='Add...', command=self.add_property_dialog).pack(side=tk.LEFT, padx=4)
         tk.Button(property_button_frame, text='Edit...', command=self.edit_selected_property).pack(side=tk.LEFT, padx=4)
         tk.Button(property_button_frame, text='Remove', command=self.remove_selected_property).pack(side=tk.LEFT, padx=4)
+
+        # === Commands ===
+        command_frame = tk.LabelFrame(scrollable_frame, text='Commands', padx=8, pady=8)
+        command_frame.pack(fill=tk.BOTH, expand=True, pady=8)
+        tk.Label(
+            command_frame,
+            text='Generate an ICommand, handler stub, and optional WPF button for each action.',
+            font=('Arial', 8, 'italic'), justify='left', wraplength=600,
+        ).pack(anchor='w', pady=(0, 4))
+
+        self.command_specs = []
+        self.command_tree = ttk.Treeview(
+            command_frame,
+            columns=('name', 'button_label', 'include_button'),
+            show='headings',
+            height=4,
+        )
+        self.command_tree.heading('name', text='Command')
+        self.command_tree.heading('button_label', text='Button Label')
+        self.command_tree.heading('include_button', text='Add Button')
+        self.command_tree.column('name', width=150, anchor='w')
+        self.command_tree.column('button_label', width=180, anchor='w')
+        self.command_tree.column('include_button', width=80, anchor='w')
+        self.command_tree.pack(fill=tk.BOTH, expand=True, pady=4)
+        self.command_tree.bind('<Double-1>', lambda event: self.edit_selected_command())
+
+        command_button_frame = tk.Frame(command_frame)
+        command_button_frame.pack(fill=tk.X, pady=4)
+        tk.Button(command_button_frame, text='Add...', command=self.add_command_dialog).pack(side=tk.LEFT, padx=4)
+        tk.Button(command_button_frame, text='Edit...', command=self.edit_selected_command).pack(side=tk.LEFT, padx=4)
+        tk.Button(command_button_frame, text='Remove', command=self.remove_selected_command).pack(side=tk.LEFT, padx=4)
         
         # === Advanced Settings ===
         advanced_frame = tk.LabelFrame(scrollable_frame, text='Advanced Settings', padx=8, pady=8)
@@ -1889,12 +2018,95 @@ class PluginGeneratorApp(tk.Tk):
         dialog.wait_window()
         return result.get('spec')
 
+    def refresh_command_tree(self):
+        self.command_tree.delete(*self.command_tree.get_children())
+        for spec in self.command_specs:
+            self.command_tree.insert('', tk.END, values=(
+                f'{spec["name"]}Command',
+                spec['button_label'],
+                'Yes' if spec['include_button'] else 'No',
+            ))
+
+    def add_command_dialog(self):
+        spec = self._command_dialog('Add Command')
+        if spec:
+            self.command_specs.append(spec)
+            self.refresh_command_tree()
+
+    def edit_selected_command(self):
+        selection = self.command_tree.selection()
+        if not selection:
+            messagebox.showinfo('Edit Command', 'Select a command to edit.')
+            return
+        index = self.command_tree.index(selection[0])
+        current = self.command_specs[index]
+        spec = self._command_dialog('Edit Command', initial=current, editing_name=current['name'])
+        if spec:
+            self.command_specs[index] = spec
+            self.refresh_command_tree()
+
+    def remove_selected_command(self):
+        selection = self.command_tree.selection()
+        if not selection:
+            messagebox.showinfo('Remove Command', 'Select a command to remove.')
+            return
+        index = self.command_tree.index(selection[0])
+        del self.command_specs[index]
+        self.refresh_command_tree()
+
+    def _command_dialog(self, title, initial=None, editing_name=None):
+        initial = initial or {}
+        dialog = tk.Toplevel(self)
+        dialog.title(title)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(True, False)
+
+        name_var = tk.StringVar(value=initial.get('name', ''))
+        button_label_var = tk.StringVar(value=initial.get('button_label', ''))
+        include_button_var = tk.BooleanVar(value=initial.get('include_button', True))
+
+        tk.Label(dialog, text='Action Name (required):').grid(row=0, column=0, sticky='w', padx=8, pady=6)
+        tk.Entry(dialog, textvariable=name_var, width=35).grid(row=0, column=1, sticky='ew', padx=8, pady=6)
+        tk.Label(dialog, text='Button Label:').grid(row=1, column=0, sticky='w', padx=8, pady=6)
+        tk.Entry(dialog, textvariable=button_label_var, width=35).grid(row=1, column=1, sticky='ew', padx=8, pady=6)
+        tk.Checkbutton(dialog, text='Add button to generated view', variable=include_button_var).grid(
+            row=2, column=0, columnspan=2, sticky='w', padx=8, pady=6
+        )
+        dialog.columnconfigure(1, weight=1)
+
+        result = {}
+
+        def on_ok():
+            existing_names = {spec['name'] for spec in self.command_specs if spec['name'] != editing_name}
+            try:
+                result['spec'] = build_command_spec(
+                    name_var.get(),
+                    button_label_var.get(),
+                    include_button_var.get(),
+                    existing_names,
+                )
+            except ValueError as error:
+                messagebox.showerror('Invalid Command', str(error), parent=dialog)
+                return
+            dialog.destroy()
+
+        button_frame = tk.Frame(dialog)
+        button_frame.grid(row=3, column=0, columnspan=2, pady=10)
+        tk.Button(button_frame, text='OK', command=on_ok, width=10).pack(side=tk.LEFT, padx=4)
+        tk.Button(button_frame, text='Cancel', command=dialog.destroy, width=10).pack(side=tk.LEFT, padx=4)
+        dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)
+        dialog.wait_window()
+        return result.get('spec')
+
     def reset_form(self):
         self.name_var.set('')
         self.description_var.set('')
         self.atlas_parameter_text.delete('1.0', tk.END)
         self.display_property_specs = []
         self.refresh_property_tree()
+        self.command_specs = []
+        self.refresh_command_tree()
         self.icon_var.set('')
         self.parameter_max_var.set('100')
         self.add_view_var.set(True)
@@ -1953,6 +2165,7 @@ class PluginGeneratorApp(tk.Tk):
                     atlas_parameters.append(identifier)
                     existing_atlas_parameters.add(identifier)
             display_property_specs = list(self.display_property_specs)
+            command_specs = list(self.command_specs)
             parameter_max_count = int(self.parameter_max_var.get())
             if atlas_parameters and not include_parameters:
                 raise ValueError('ATLAS parameters require Current value or Visible range behavior.')
@@ -1966,6 +2179,7 @@ class PluginGeneratorApp(tk.Tk):
                 behavior=self.behavior_var.get(),
                 atlas_parameters=atlas_parameters,
                 display_property_specs=display_property_specs,
+                command_specs=command_specs,
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,

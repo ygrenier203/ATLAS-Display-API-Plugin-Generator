@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,6 +13,8 @@ from tools.PluginGenerator.gui import (
     behavior_uses_parameters,
     build_generated_plugin,
     build_atlas_parameter,
+    build_command_button,
+    build_command_spec,
     build_display_property,
     build_display_property_field,
     build_display_property_spec,
@@ -110,6 +113,17 @@ class ParameterAndPropertyTests(unittest.TestCase):
 
         self.assertIn('this.SaveProperty(value);', source)
         self.assertIn('this.MakeDataRequests(true, true);', source)
+
+    def test_command_name_and_default_label_are_normalized(self):
+        spec = build_command_spec('ExportDataCommand')
+
+        self.assertEqual('ExportData', spec['name'])
+        self.assertEqual('Export Data', spec['button_label'])
+
+    def test_command_button_escapes_xaml_text(self):
+        spec = build_command_spec('Export', 'Save & Close')
+
+        self.assertIn('Content="Save &amp; Close"', build_command_button(spec))
 
 
 class GenerationTests(unittest.TestCase):
@@ -284,6 +298,37 @@ class GenerationTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, 'CS1002'):
             build_generated_plugin(target, build_tool=('dotnet', 'dotnet.exe'))
+
+    def test_basic_plugin_generates_command_handler_and_button(self):
+        command = build_command_spec('ClearLog', 'Clear Log')
+        target = self.generate(
+            include_parameters=False,
+            command_specs=[command],
+        )
+        project = target / 'SeparationPlugin'
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+        view_path = project / 'SeparationPluginView.xaml'
+        view = view_path.read_text(encoding='utf-8')
+
+        self.assertIn('public ICommand ClearLogCommand', viewmodel)
+        self.assertIn('new DelegateCommand(this.OnClearLog)', viewmodel)
+        self.assertIn('private void OnClearLog()', viewmodel)
+        self.assertIn('Command="{Binding ClearLogCommand}"', view)
+        ET.parse(view_path)
+
+    def test_command_can_omit_view_button(self):
+        command = build_command_spec('InternalRefresh', include_button=False)
+        target = self.generate(
+            behavior=BEHAVIOR_CURRENT_VALUE,
+            library_project=str(LIBRARY_PROJECT),
+            command_specs=[command],
+        )
+        project = target / 'SeparationPlugin'
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+        view = (project / 'SeparationPluginView.xaml').read_text(encoding='utf-8')
+
+        self.assertIn('InternalRefreshCommand', viewmodel)
+        self.assertNotIn('InternalRefreshCommand', view)
 
 
 if __name__ == '__main__':
