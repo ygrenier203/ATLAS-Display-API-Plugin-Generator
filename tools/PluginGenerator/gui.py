@@ -180,6 +180,7 @@ namespace {namespace}
 {service_members}
 {status_state_properties}{display_properties}
 {command_properties}
+    {atlas_parameter_setup}
 {command_handlers}    }}
 }}
 '''
@@ -1416,10 +1417,51 @@ def build_status_state():
     return fields, properties
 
 
+def build_lifecycle_hooks(atlas_parameters, include_hooks):
+    if not atlas_parameters and not include_hooks:
+        return ''
+    registrations = '\n'.join(
+        f'            this.DisplayParameterService.AddParameterContainer("{escape_csharp_string(identifier)}");'
+        for identifier in atlas_parameters
+    )
+    initialised_body = '\n'.join(filter(None, [
+        '            base.OnInitialised();',
+        registrations,
+        '            // TODO: Add one-time display setup.' if include_hooks else '',
+    ]))
+    result = (
+        '        protected override void OnInitialised()\n'
+        '        {\n'
+        f'{initialised_body}\n'
+        '        }\n'
+    )
+    if not include_hooks:
+        return result
+    return result + '''
+        public override void OnActiveDisplayPageChanged(bool isActive)
+        {
+            base.OnActiveDisplayPageChanged(isActive);
+            // TODO: Respond when the containing display page becomes active or inactive.
+        }
+
+        public override void OnCanRenderDisplayChanged(bool canRender)
+        {
+            base.OnCanRenderDisplayChanged(canRender);
+            // TODO: Respond when this display becomes visible or hidden.
+        }
+
+        protected override void OnDisposeManagedResources()
+        {
+            // TODO: Dispose resources created by this ViewModel.
+            base.OnDisposeManagedResources();
+        }
+'''
+
+
 def generate_plugin(name, base_out, include_view=True, include_parameters=True, behavior=None, atlas_parameters=None,
                     display_property_specs=None, command_specs=None, parameter_max_count=100, workspace_root=None,
                     description=None, library_project=None, icon_path=None, service_names=None,
-                    include_status_state=False):
+                    include_status_state=False, include_lifecycle_hooks=False):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -1511,18 +1553,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     atlas_parameter_setup = ''
     display_property_fields = ''
     display_properties = ''
-    if include_parameters and atlas_parameters:
-        registrations = '\n'.join(
-                f'            this.DisplayParameterService.AddParameterContainer("{escape_csharp_string(identifier)}");'
-            for identifier in atlas_parameters
-        )
-        atlas_parameter_setup = (
-            '        protected override void OnInitialised()\n'
-            '        {\n'
-            '            base.OnInitialised();\n'
-            f'{registrations}\n'
-            '        }\n'
-        )
+    atlas_parameter_setup = build_lifecycle_hooks(
+        atlas_parameters if include_parameters else [],
+        include_lifecycle_hooks,
+    )
     if display_property_specs:
         display_property_fields = '\n'.join(
             build_display_property_field(spec) for spec in display_property_specs
@@ -1879,6 +1913,13 @@ class PluginGeneratorApp(tk.Tk):
             text='Generate loading, status, and error state',
             variable=self.status_state_var,
         ).grid(row=3, column=0, columnspan=2, sticky='w', pady=4)
+
+        self.lifecycle_hooks_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            advanced_frame,
+            text='Generate lifecycle hooks',
+            variable=self.lifecycle_hooks_var,
+        ).grid(row=4, column=0, columnspan=2, sticky='w', pady=4)
         
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
@@ -2183,6 +2224,7 @@ class PluginGeneratorApp(tk.Tk):
         self.open_folder_var.set(True)
         self.build_after_generation_var.set(True)
         self.status_state_var.set(False)
+        self.lifecycle_hooks_var.set(False)
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
@@ -2248,6 +2290,7 @@ class PluginGeneratorApp(tk.Tk):
                 display_property_specs=display_property_specs,
                 command_specs=command_specs,
                 include_status_state=self.status_state_var.get(),
+                include_lifecycle_hooks=self.lifecycle_hooks_var.get(),
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,

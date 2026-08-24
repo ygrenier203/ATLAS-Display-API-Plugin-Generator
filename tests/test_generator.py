@@ -18,6 +18,7 @@ from tools.PluginGenerator.gui import (
     build_command_initializer,
     build_command_spec,
     build_status_state,
+    build_lifecycle_hooks,
     build_display_property,
     build_display_property_field,
     build_display_property_spec,
@@ -149,6 +150,16 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('public string ErrorMessage', properties)
         self.assertEqual(3, properties.count('this.SetProperty('))
 
+    def test_lifecycle_hooks_include_base_calls_and_parameter_setup(self):
+        source = build_lifecycle_hooks(['vCar:Chassis'], True)
+
+        self.assertEqual(1, source.count('protected override void OnInitialised()'))
+        self.assertIn('base.OnInitialised();', source)
+        self.assertIn('AddParameterContainer("vCar:Chassis")', source)
+        self.assertIn('OnActiveDisplayPageChanged(bool isActive)', source)
+        self.assertIn('OnCanRenderDisplayChanged(bool canRender)', source)
+        self.assertIn('OnDisposeManagedResources()', source)
+
 
 class GenerationTests(unittest.TestCase):
     def generate(self, **options):
@@ -200,6 +211,14 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('public bool IsBusy', viewmodel)
         self.assertIn('public string StatusMessage', viewmodel)
         self.assertIn('public string ErrorMessage', viewmodel)
+
+    def test_basic_plugin_can_generate_lifecycle_hooks(self):
+        target = self.generate(include_parameters=False, include_lifecycle_hooks=True)
+        viewmodel = (target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+
+        self.assertIn('protected override void OnInitialised()', viewmodel)
+        self.assertIn('public override void OnActiveDisplayPageChanged(bool isActive)', viewmodel)
+        self.assertIn('protected override void OnDisposeManagedResources()', viewmodel)
         self.assertNotIn('public string Vcar', viewmodel)
 
     def test_generated_project_can_disable_deployment_during_validation(self):
