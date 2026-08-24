@@ -2,7 +2,7 @@ import os
 import re
 import json
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import shutil
 import uuid
 
@@ -138,6 +138,7 @@ namespace {namespace}
     [DisplayPluginSettings(ParametersMaxCount = {parameter_max_count})]
     public sealed class {viewmodel_class} : ParameterSampleDisplayViewModelBase<ParameterViewModel>
     {{
+{custom_parameter_fields}
         public {viewmodel_class}(
             ISignalBus signalBus,
             IDataRequestSignalFactory dataRequestSignalFactory,
@@ -146,6 +147,7 @@ namespace {namespace}
         {{
         }}
 
+{custom_parameter_properties}
     {custom_parameter_setup}
         protected override ParameterViewModel OnCreateParameterViewModel() => new ParameterViewModel();
     }}
@@ -356,16 +358,84 @@ def normalize_plugin_name(name):
     return name
 
 
-def parse_parameter_names(value):
-    names = [line.strip() for line in value.splitlines() if line.strip()]
-    duplicates = sorted({name for name in names if names.count(name) > 1})
-    if duplicates:
-        raise ValueError(f'Duplicate custom parameters: {", ".join(duplicates)}')
-    return names
+def to_camel_case(identifier):
+    return identifier[:1].lower() + identifier[1:] if identifier else identifier
+
+
+def build_parameter_spec(name, display_name='', category='', description='', order='', persisted=False, browsable=True, existing_names=None):
+    name = (name or '').strip()
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
+        raise ValueError(f'Parameter identifier "{name}" must be a valid C# identifier.')
+    if existing_names and name in existing_names:
+        raise ValueError(f'A parameter named "{name}" already exists.')
+    display_name = (display_name or '').strip()
+    category = (category or '').strip()
+    description = (description or '').strip()
+    order_text = str(order).strip()
+    if not order_text:
+        order_value = None
+    elif re.fullmatch(r'-?\d+', order_text):
+        order_value = int(order_text)
+    else:
+        raise ValueError(f'Parameter "{name}" order must be an integer.')
+    return {
+        'name': name,
+        'display_name': display_name,
+        'category': category,
+        'description': description,
+        'order': order_value,
+        'persisted': bool(persisted),
+        'browsable': bool(browsable),
+    }
 
 
 def escape_csharp_string(value):
     return value.replace('\\', '\\\\').replace('"', '\\"')
+
+
+def build_parameter_field(spec):
+    field = '_' + to_camel_case(spec['name'])
+    return f'        private string {field};'
+
+
+def build_parameter_property(spec):
+    field = '_' + to_camel_case(spec['name'])
+    default_value = escape_csharp_string(spec['name'])
+    if spec['persisted']:
+        accessor = (
+            f'            get => this.{field} = this.ReadProperty("{default_value}");\n'
+            '            set\n'
+            '            {\n'
+            f'                if (this.SetProperty(ref this.{field}, value))\n'
+            '                {\n'
+            '                    this.SaveProperty(value);\n'
+            '                }\n'
+            '            }\n'
+        )
+    else:
+        accessor = (
+            f'            get => this.{field};\n'
+            f'            set => this.SetProperty(ref this.{field}, value);\n'
+        )
+    attributes = []
+    if spec['category']:
+        attributes.append(f'        [Category("{escape_csharp_string(spec["category"])}")]')
+    if spec['display_name']:
+        attributes.append(f'        [DisplayName("{escape_csharp_string(spec["display_name"])}")]')
+    if spec['description']:
+        attributes.append(f'        [Description("{escape_csharp_string(spec["description"])}")]')
+    if spec['order'] is not None:
+        attributes.append(f'        [Display(Order = {spec["order"]})]')
+    if not spec['browsable']:
+        attributes.append('        [Browsable(false)]')
+    attribute_block = ''.join(f'{attribute}\n' for attribute in attributes)
+    return (
+        f'{attribute_block}'
+        f'        public string {spec["name"]}\n'
+        '        {\n'
+        f'{accessor}'
+        '        }\n'
+    )
 
 
 def validate_icon_path(icon_path):
@@ -377,12 +447,12 @@ def validate_icon_path(icon_path):
     return icon_path
 
 
-def generate_plugin(name, base_out, include_view=True, include_parameters=True, parameter_names=None, parameter_max_count=100, workspace_root=None, description=None, library_project=None, icon_path=None):
+def generate_plugin(name, base_out, include_view=True, include_parameters=True, parameter_specs=None, parameter_max_count=100, workspace_root=None, description=None, library_project=None, icon_path=None):
     name = normalize_plugin_name(name)
     if not isinstance(parameter_max_count, int) or parameter_max_count < 1:
         raise ValueError('Maximum parameter count must be a positive integer.')
-    parameter_names = list(parameter_names or [])
-    if len(parameter_names) > parameter_max_count:
+    parameter_specs = list(parameter_specs or [])
+    if len(parameter_specs) > parameter_max_count:
         raise ValueError('Maximum parameter count cannot be lower than the number of custom parameters.')
     namespace = name
     workspace_root = os.path.abspath(workspace_root or default_workspace_root())
@@ -444,10 +514,12 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     viewmodel_template = VIEWMODEL_TEMPLATE if include_parameters else BASIC_VIEWMODEL_TEMPLATE
     view_template = VIEW_XAML_TEMPLATE if include_parameters else BASIC_VIEW_XAML_TEMPLATE
     parameter_setup = ''
-    if include_parameters and parameter_names:
+    custom_parameter_fields = ''
+    custom_parameter_properties = ''
+    if include_parameters and parameter_specs:
         registrations = '\n'.join(
-                f'            this.DisplayParameterService.AddParameterContainer("{escape_csharp_string(parameter_name)}");'
-            for parameter_name in parameter_names
+                f'            this.DisplayParameterService.AddParameterContainer("{escape_csharp_string(spec["name"])}");'
+            for spec in parameter_specs
         )
         parameter_setup = (
             '        protected override void OnInitialised()\n'
@@ -456,6 +528,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             f'{registrations}\n'
             '        }\n'
         )
+        custom_parameter_fields = '\n'.join(build_parameter_field(spec) for spec in parameter_specs)
+        custom_parameter_properties = '\n'.join(build_parameter_property(spec) for spec in parameter_specs)
 
     files = {
         f'{name}.csproj': csproj,
@@ -475,6 +549,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             viewmodel_class=f'{name}ViewModel',
             view_class=f'{name}View',
             custom_parameter_setup=parameter_setup,
+            custom_parameter_fields=custom_parameter_fields,
+            custom_parameter_properties=custom_parameter_properties,
             parameter_max_count=parameter_max_count,
         ),
     }
@@ -591,16 +667,31 @@ class PluginGeneratorApp(tk.Tk):
         # === Custom Parameters ===
         param_frame = tk.LabelFrame(scrollable_frame, text='Custom Parameters', padx=8, pady=8)
         param_frame.pack(fill=tk.BOTH, expand=True, pady=8)
-        
-        tk.Label(param_frame, text='Enter one parameter identifier per line (optional):', font=('Arial', 9)).pack(anchor='w', pady=4)
-        self.parameter_text = tk.Text(param_frame, width=50, height=5)
-        self.parameter_text.pack(fill=tk.BOTH, expand=True, pady=4)
-        scrollbar_param = tk.Scrollbar(param_frame, command=self.parameter_text.yview)
-        scrollbar_param.pack(side=tk.RIGHT, fill=tk.Y)
-        self.parameter_text.config(yscrollcommand=scrollbar_param.set)
-        
-        tk.Label(param_frame, text='Example: "EngineSpeed", "BrakePressure", "Temperature"', 
-                font=('Arial', 8, 'italic')).pack(anchor='w')
+
+        self.parameter_specs = []
+
+        tree_columns = ('identifier', 'display_name', 'category', 'order', 'persisted', 'browsable')
+        column_headings = {
+            'identifier': 'Identifier',
+            'display_name': 'Display Name',
+            'category': 'Category',
+            'order': 'Order',
+            'persisted': 'Persisted',
+            'browsable': 'Browsable',
+        }
+        column_widths = {'identifier': 120, 'display_name': 140, 'category': 100, 'order': 50, 'persisted': 70, 'browsable': 70}
+        self.parameter_tree = ttk.Treeview(param_frame, columns=tree_columns, show='headings', height=6)
+        for column in tree_columns:
+            self.parameter_tree.heading(column, text=column_headings[column])
+            self.parameter_tree.column(column, width=column_widths[column], anchor='w')
+        self.parameter_tree.pack(fill=tk.BOTH, expand=True, pady=4)
+        self.parameter_tree.bind('<Double-1>', lambda event: self.edit_selected_parameter())
+
+        parameter_button_frame = tk.Frame(param_frame)
+        parameter_button_frame.pack(fill=tk.X, pady=4)
+        tk.Button(parameter_button_frame, text='Add...', command=self.add_parameter_dialog).pack(side=tk.LEFT, padx=4)
+        tk.Button(parameter_button_frame, text='Edit...', command=self.edit_selected_parameter).pack(side=tk.LEFT, padx=4)
+        tk.Button(parameter_button_frame, text='Remove', command=self.remove_selected_parameter).pack(side=tk.LEFT, padx=4)
         
         # === Advanced Settings ===
         advanced_frame = tk.LabelFrame(scrollable_frame, text='Advanced Settings', padx=8, pady=8)
@@ -657,10 +748,114 @@ class PluginGeneratorApp(tk.Tk):
         if path:
             self.icon_var.set(path)
 
+    def refresh_parameter_tree(self):
+        self.parameter_tree.delete(*self.parameter_tree.get_children())
+        for spec in self.parameter_specs:
+            self.parameter_tree.insert('', tk.END, values=(
+                spec['name'],
+                spec['display_name'],
+                spec['category'],
+                '' if spec['order'] is None else spec['order'],
+                'Yes' if spec['persisted'] else 'No',
+                'Yes' if spec['browsable'] else 'No',
+            ))
+
+    def add_parameter_dialog(self):
+        spec = self._parameter_dialog('Add Parameter')
+        if spec:
+            self.parameter_specs.append(spec)
+            self.refresh_parameter_tree()
+
+    def edit_selected_parameter(self):
+        selection = self.parameter_tree.selection()
+        if not selection:
+            messagebox.showinfo('Edit Parameter', 'Select a parameter to edit.')
+            return
+        index = self.parameter_tree.index(selection[0])
+        current = self.parameter_specs[index]
+        spec = self._parameter_dialog('Edit Parameter', initial=current, editing_name=current['name'])
+        if spec:
+            self.parameter_specs[index] = spec
+            self.refresh_parameter_tree()
+
+    def remove_selected_parameter(self):
+        selection = self.parameter_tree.selection()
+        if not selection:
+            messagebox.showinfo('Remove Parameter', 'Select a parameter to remove.')
+            return
+        index = self.parameter_tree.index(selection[0])
+        del self.parameter_specs[index]
+        self.refresh_parameter_tree()
+
+    def _parameter_dialog(self, title, initial=None, editing_name=None):
+        initial = initial or {}
+        dialog = tk.Toplevel(self)
+        dialog.title(title)
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        identifier_var = tk.StringVar(value=initial.get('name', ''))
+        display_name_var = tk.StringVar(value=initial.get('display_name', ''))
+        category_var = tk.StringVar(value=initial.get('category', ''))
+        description_var = tk.StringVar(value=initial.get('description', ''))
+        order_var = tk.StringVar(value='' if initial.get('order') is None else str(initial['order']))
+        persisted_var = tk.BooleanVar(value=initial.get('persisted', False))
+        browsable_var = tk.BooleanVar(value=initial.get('browsable', True))
+
+        fields = [
+            ('Identifier (required):', identifier_var),
+            ('Display Name:', display_name_var),
+            ('Category:', category_var),
+            ('Description:', description_var),
+            ('Order:', order_var),
+        ]
+        for row, (label_text, var) in enumerate(fields):
+            tk.Label(dialog, text=label_text).grid(row=row, column=0, sticky='w', padx=8, pady=6)
+            tk.Entry(dialog, textvariable=var, width=35).grid(row=row, column=1, sticky='ew', padx=8, pady=6)
+        tk.Checkbutton(dialog, text='Persist to workbook', variable=persisted_var).grid(
+            row=len(fields), column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        tk.Checkbutton(dialog, text='Visible in properties window (Browsable)', variable=browsable_var).grid(
+            row=len(fields) + 1, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        dialog.columnconfigure(1, weight=1)
+
+        result = {}
+
+        def on_ok():
+            existing_names = {spec['name'] for spec in self.parameter_specs if spec['name'] != editing_name}
+            try:
+                result['spec'] = build_parameter_spec(
+                    identifier_var.get(),
+                    display_name_var.get(),
+                    category_var.get(),
+                    description_var.get(),
+                    order_var.get(),
+                    persisted_var.get(),
+                    browsable_var.get(),
+                    existing_names=existing_names,
+                )
+            except ValueError as error:
+                messagebox.showerror('Invalid Parameter', str(error), parent=dialog)
+                return
+            dialog.destroy()
+
+        def on_cancel():
+            dialog.destroy()
+
+        button_frame = tk.Frame(dialog)
+        button_frame.grid(row=len(fields) + 2, column=0, columnspan=2, pady=10)
+        tk.Button(button_frame, text='OK', command=on_ok, width=10).pack(side=tk.LEFT, padx=4)
+        tk.Button(button_frame, text='Cancel', command=on_cancel, width=10).pack(side=tk.LEFT, padx=4)
+
+        dialog.protocol('WM_DELETE_WINDOW', on_cancel)
+        dialog.wait_window()
+        return result.get('spec')
+
     def reset_form(self):
         self.name_var.set('')
         self.description_var.set('')
-        self.parameter_text.delete('1.0', tk.END)
+        self.parameter_specs = []
+        self.refresh_parameter_tree()
         self.icon_var.set('')
         self.parameter_max_var.set('100')
         self.add_view_var.set(True)
@@ -693,9 +888,9 @@ class PluginGeneratorApp(tk.Tk):
                 raise ValueError('Select DisplayPluginLibrary.csproj before generating a parameter plugin.')
             if not icon_path:
                 raise ValueError('Select a PNG icon before generating the plugin.')
-            parameter_names = parse_parameter_names(self.parameter_text.get('1.0', 'end'))
+            parameter_specs = list(self.parameter_specs)
             parameter_max_count = int(self.parameter_max_var.get())
-            if parameter_names and not self.add_parameters_var.get():
+            if parameter_specs and not self.add_parameters_var.get():
                 raise ValueError('Enable dynamic parameter support to generate custom parameters.')
             os.makedirs(base_out, exist_ok=True)
             target = generate_plugin(
@@ -703,7 +898,7 @@ class PluginGeneratorApp(tk.Tk):
                 base_out,
                 include_view=self.add_view_var.get(),
                 include_parameters=self.add_parameters_var.get(),
-                parameter_names=parameter_names,
+                parameter_specs=parameter_specs,
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,
