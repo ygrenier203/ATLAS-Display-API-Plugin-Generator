@@ -598,7 +598,7 @@ class PluginGeneratorApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title('ATLAS Display Plugin Generator')
-        self.geometry('560x800')
+        self.minsize(480, 400)
         self.resizable(True, True)
         settings = load_settings()
         
@@ -615,8 +615,20 @@ class PluginGeneratorApp(tk.Tk):
             lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
         
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+
+        def on_canvas_configure(event):
+            # Stretch the scrollable content to fill the canvas as the window is resized.
+            canvas.itemconfig(canvas_window, width=event.width)
+
+        canvas.bind("<Configure>", on_canvas_configure)
+
+        def on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda event: canvas.bind_all("<MouseWheel>", on_mousewheel))
+        canvas.bind("<Leave>", lambda event: canvas.unbind_all("<MouseWheel>"))
         
         # === Basic Plugin Information ===
         info_frame = tk.LabelFrame(scrollable_frame, text='Basic Information', padx=8, pady=8)
@@ -720,6 +732,21 @@ class PluginGeneratorApp(tk.Tk):
         canvas.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
+        self._fit_window_to_content(scrollable_frame)
+
+    def _fit_window_to_content(self, scrollable_frame):
+        # Measuring reqwidth/reqheight of canvas-embedded widgets is unreliable before the
+        # window is realized, so size to a generous fixed target capped to the screen instead.
+        target_width = 700
+        target_height = 900
+        screen_width = self.winfo_screenwidth()
+        screen_height = self.winfo_screenheight()
+        width = min(target_width, screen_width - 100)
+        height = min(target_height, screen_height - 100)
+        x = (screen_width - width) // 2
+        y = (screen_height - height) // 2
+        self.geometry(f'{width}x{height}+{x}+{y}')
+
     def browse(self):
         initial = self.out_var.get()
         if not os.path.isdir(initial):
@@ -793,7 +820,8 @@ class PluginGeneratorApp(tk.Tk):
         dialog.title(title)
         dialog.transient(self)
         dialog.grab_set()
-        dialog.resizable(False, False)
+        dialog.resizable(True, True)
+        dialog.minsize(320, 260)
 
         identifier_var = tk.StringVar(value=initial.get('name', ''))
         display_name_var = tk.StringVar(value=initial.get('display_name', ''))
