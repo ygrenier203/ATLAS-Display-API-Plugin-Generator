@@ -278,7 +278,7 @@ def open_icon_maker(parent, initial_directory='', save_path=None, on_saved=None)
                         )
         elif symbol == 'graph':
             points = (margin, 150, 76, 112, 116, 128, 158, margin)
-            canvas.create_line(*points, fill=foreground, width=width, joint='curve')
+            canvas.create_line(*points, fill=foreground, width=width, joinstyle='round')
             for index in range(0, len(points), 2):
                 canvas.create_oval(points[index] - 5, points[index + 1] - 5,
                                    points[index] + 5, points[index + 1] + 5,
