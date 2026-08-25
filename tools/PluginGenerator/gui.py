@@ -2419,9 +2419,6 @@ class PluginGeneratorApp(tk.Tk):
         )
         self.basic_layout_combo.pack(fill=tk.X, pady=(0, 4))
         
-        self.add_view_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(config_frame, text='Include simple WPF View', variable=self.add_view_var).pack(anchor='w', pady=4)
-
         # === Injected Services ===
         services_frame = tk.LabelFrame(scrollable_frame, text='Injected Services', padx=8, pady=8)
         services_frame.pack(fill=tk.X, pady=8)
@@ -3170,7 +3167,6 @@ class PluginGeneratorApp(tk.Tk):
         self.icon_var.set('')
         self.atlas_install_var.set(DEFAULT_ATLAS_INSTALL_DIRECTORY)
         self.parameter_max_var.set('100')
-        self.add_view_var.set(True)
         self.behavior_var.set(BEHAVIOR_CURRENT_VALUE)
         self.basic_layout_var.set('text')
         for service_var in self.service_vars.values():
@@ -3229,7 +3225,6 @@ class PluginGeneratorApp(tk.Tk):
             'description': self.description_var.get(),
             'behavior': self.behavior_var.get(),
             'basic_layout': self.basic_layout_var.get(),
-            'include_view': self.add_view_var.get(),
             'atlas_parameters': self.atlas_parameter_text.get('1.0', tk.END).splitlines(),
             'display_properties': self.display_property_specs,
             'commands': self.command_specs,
@@ -3249,7 +3244,6 @@ class PluginGeneratorApp(tk.Tk):
         self.description_var.set(configuration.get('description', ''))
         self.behavior_var.set(configuration.get('behavior', BEHAVIOR_CURRENT_VALUE))
         self.basic_layout_var.set(configuration.get('basic_layout', 'text'))
-        self.add_view_var.set(configuration.get('include_view', True))
         self.atlas_parameter_text.delete('1.0', tk.END)
         self.atlas_parameter_text.insert('1.0', '\n'.join(configuration.get('atlas_parameters', [])))
         self.display_property_specs = list(configuration.get('display_properties', []))
@@ -3330,7 +3324,7 @@ class PluginGeneratorApp(tk.Tk):
             summary = build_generation_summary(
                 name,
                 self.behavior_var.get(),
-                self.add_view_var.get(),
+                True,
                 atlas_parameters,
                 display_property_specs,
                 command_specs,
@@ -3351,7 +3345,7 @@ class PluginGeneratorApp(tk.Tk):
             target = generate_plugin(
                 name,
                 base_out,
-                include_view=self.add_view_var.get(),
+                include_view=True,
                 include_parameters=include_parameters,
                 behavior=self.behavior_var.get(),
                 atlas_parameters=atlas_parameters,
