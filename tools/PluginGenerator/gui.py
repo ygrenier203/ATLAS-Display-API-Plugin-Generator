@@ -1721,8 +1721,19 @@ def command_display_label(name):
     return re.sub(r'(?<!^)(?=[A-Z])', ' ', name)
 
 
+COMMAND_ACTIONS = {
+    'Custom code placeholder': 'custom',
+    'Toggle Boolean property': 'toggle',
+    'Set property value': 'set',
+    'Reset property to default': 'reset',
+    'Increment numeric property': 'increment',
+    'Decrement numeric property': 'decrement',
+}
+
+
 def build_command_spec(name, button_label='', include_button=True, existing_names=None, generate_can_execute=False,
-                       generate_log=False, break_when_attached=False):
+                       generate_log=False, break_when_attached=False, action='custom', target_property='',
+                       action_value=''):
     name = (name or '').strip()
     if name.endswith('Command'):
         name = name[:-len('Command')]
@@ -1730,6 +1741,8 @@ def build_command_spec(name, button_label='', include_button=True, existing_name
         raise ValueError('Command name must be a valid C# identifier.')
     if existing_names and name in existing_names:
         raise ValueError(f'A command named "{name}" already exists.')
+    if action not in COMMAND_ACTIONS.values():
+        raise ValueError(f'Unsupported command action: {action}')
     return {
         'name': name,
         'button_label': (button_label or '').strip() or command_display_label(name),
@@ -1737,6 +1750,9 @@ def build_command_spec(name, button_label='', include_button=True, existing_name
         'generate_can_execute': bool(generate_can_execute),
         'generate_log': bool(generate_log),
         'break_when_attached': bool(break_when_attached),
+        'action': action,
+        'target_property': (target_property or '').strip(),
+        'action_value': str(action_value or '').strip(),
     }
 
 
@@ -1755,7 +1771,50 @@ def build_command_initializer(spec):
     )
 
 
-def build_command_handler(spec, logger_expression='this.Logger'):
+def validate_command_actions(command_specs, display_property_specs):
+    properties = {spec['name']: spec for spec in display_property_specs}
+    numeric_types = {'int', 'long', 'double', 'float', 'decimal'}
+    for command in command_specs:
+        action = command.get('action', 'custom')
+        if action == 'custom':
+            continue
+        target_name = command.get('target_property', '')
+        target = properties.get(target_name)
+        if not target:
+            raise ValueError(f'Command "{command["name"]}" must target an existing display property.')
+        if target.get('read_only', False):
+            raise ValueError(f'Command "{command["name"]}" cannot change read-only property "{target_name}".')
+        if action == 'toggle' and target['type'] != 'bool':
+            raise ValueError(f'Command "{command["name"]}" can only toggle a Boolean property.')
+        if action in ('increment', 'decrement') and target['type'] not in numeric_types:
+            raise ValueError(f'Command "{command["name"]}" requires a numeric property.')
+        if action == 'set':
+            command['_action_literal'] = display_property_default_literal({
+                'type': target['type'],
+                'default': parse_display_property_default(target['type'], command.get('action_value', '')),
+            })
+
+
+def build_command_action_statement(spec, display_properties=None):
+    action = spec.get('action', 'custom')
+    if action == 'custom':
+        return f'            // TODO: Implement {spec["name"]}.\n'
+    target = spec['target_property']
+    if action == 'toggle':
+        expression = f'!this.{target}'
+    elif action == 'set':
+        expression = spec['_action_literal']
+    elif action == 'reset':
+        target_spec = {item['name']: item for item in (display_properties or [])}[target]
+        expression = display_property_default_literal(target_spec)
+    elif action == 'increment':
+        expression = f'this.{target} + 1'
+    else:
+        expression = f'this.{target} - 1'
+    return f'            this.{target} = {expression};\n'
+
+
+def build_command_handler(spec, logger_expression='this.Logger', display_properties=None):
     instrumentation = ''
     if spec.get('generate_log', False):
         instrumentation += f'            {logger_expression}.Trace("Command {spec["name"]} executed.");\n'
@@ -1770,7 +1829,7 @@ def build_command_handler(spec, logger_expression='this.Logger'):
         f'        private void On{spec["name"]}()\n'
         '        {\n'
         f'{instrumentation}'
-        f'            // TODO: Implement {spec["name"]}.\n'
+        f'{build_command_action_statement(spec, display_properties)}'
         '        }\n'
     )
     if not spec.get('generate_can_execute', False):
@@ -1940,6 +1999,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     command_specs = list(command_specs or [])
     dll_specs = normalize_dll_specs(dll_specs)
     validate_display_property_actions(display_property_specs, behavior)
+    validate_command_actions(command_specs, display_property_specs)
     if atlas_parameters and not include_parameters:
         raise ValueError('ATLAS parameters require a data behavior.')
     if include_item_collection and behavior != BEHAVIOR_BASIC:
@@ -2092,7 +2152,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     command_properties = '\n'.join(build_command_property(spec) for spec in command_specs)
     command_initializers = ''.join(build_command_initializer(spec) for spec in command_specs)
     logger_expression = 'this.Logger' if include_parameters else 'this.logger'
-    command_handlers = '\n'.join(build_command_handler(spec, logger_expression) for spec in command_specs)
+    command_handlers = '\n'.join(
+        build_command_handler(spec, logger_expression, display_property_specs)
+        for spec in command_specs
+    )
     command_buttons = ''.join(build_command_button(spec) for spec in command_specs)
     status_state_fields, status_state_properties = build_status_state() if include_status_state else ('', '')
     threading_fields = build_threading_fields(include_synchronization_context, include_object_lock)
@@ -2468,17 +2531,21 @@ class PluginGeneratorApp(tk.Tk):
         self.command_specs = []
         self.command_tree = ttk.Treeview(
             command_frame,
-            columns=('name', 'button_label', 'include_button', 'can_execute', 'log', 'breakpoint'),
+            columns=('name', 'action', 'target', 'button_label', 'include_button', 'can_execute', 'log', 'breakpoint'),
             show='headings',
             height=4,
         )
         self.command_tree.heading('name', text='Command')
+        self.command_tree.heading('action', text='Action')
+        self.command_tree.heading('target', text='Target')
         self.command_tree.heading('button_label', text='Button Label')
         self.command_tree.heading('include_button', text='Add Button')
         self.command_tree.heading('can_execute', text='Enabled Rule')
         self.command_tree.heading('log', text='Log')
         self.command_tree.heading('breakpoint', text='Debug Break')
         self.command_tree.column('name', width=150, anchor='w')
+        self.command_tree.column('action', width=145, anchor='w')
+        self.command_tree.column('target', width=100, anchor='w')
         self.command_tree.column('button_label', width=180, anchor='w')
         self.command_tree.column('include_button', width=80, anchor='w')
         self.command_tree.column('can_execute', width=100, anchor='w')
@@ -2988,6 +3055,8 @@ class PluginGeneratorApp(tk.Tk):
         for spec in self.command_specs:
             self.command_tree.insert('', tk.END, values=(
                 f'{spec["name"]}Command',
+                next(label for label, action in COMMAND_ACTIONS.items() if action == spec.get('action', 'custom')),
+                spec.get('target_property', ''),
                 spec['button_label'],
                 'Yes' if spec['include_button'] else 'No',
                 'Generated' if spec.get('generate_can_execute', False) else 'Always',
@@ -3036,29 +3105,60 @@ class PluginGeneratorApp(tk.Tk):
         can_execute_var = tk.BooleanVar(value=initial.get('generate_can_execute', False))
         generate_log_var = tk.BooleanVar(value=initial.get('generate_log', False))
         breakpoint_var = tk.BooleanVar(value=initial.get('break_when_attached', False))
+        initial_action = initial.get('action', 'custom')
+        action_var = tk.StringVar(value=next(
+            label for label, action in COMMAND_ACTIONS.items() if action == initial_action
+        ))
+        target_property_var = tk.StringVar(value=initial.get('target_property', ''))
+        action_value_var = tk.StringVar(value=initial.get('action_value', ''))
 
         tk.Label(dialog, text='Action Name (required):').grid(row=0, column=0, sticky='w', padx=8, pady=6)
         tk.Entry(dialog, textvariable=name_var, width=35).grid(row=0, column=1, sticky='ew', padx=8, pady=6)
         tk.Label(dialog, text='Button Label:').grid(row=1, column=0, sticky='w', padx=8, pady=6)
         tk.Entry(dialog, textvariable=button_label_var, width=35).grid(row=1, column=1, sticky='ew', padx=8, pady=6)
+        tk.Label(dialog, text='Command Action:').grid(row=2, column=0, sticky='w', padx=8, pady=6)
+        action_combo = ttk.Combobox(
+            dialog, textvariable=action_var, values=tuple(COMMAND_ACTIONS), state='readonly', width=32
+        )
+        action_combo.grid(row=2, column=1, sticky='ew', padx=8, pady=6)
+        tk.Label(dialog, text='Target Property:').grid(row=3, column=0, sticky='w', padx=8, pady=6)
+        target_combo = ttk.Combobox(
+            dialog,
+            textvariable=target_property_var,
+            values=tuple(spec['name'] for spec in self.display_property_specs),
+            state='readonly',
+            width=32,
+        )
+        target_combo.grid(row=3, column=1, sticky='ew', padx=8, pady=6)
+        tk.Label(dialog, text='Value (for Set):').grid(row=4, column=0, sticky='w', padx=8, pady=6)
+        value_entry = tk.Entry(dialog, textvariable=action_value_var, width=35)
+        value_entry.grid(row=4, column=1, sticky='ew', padx=8, pady=6)
         tk.Checkbutton(dialog, text='Add button to generated view', variable=include_button_var).grid(
-            row=2, column=0, columnspan=2, sticky='w', padx=8, pady=6
+            row=5, column=0, columnspan=2, sticky='w', padx=8, pady=6
         )
         tk.Checkbutton(
             dialog,
             text='Generate an enabled/disabled rule (CanExecute)',
             variable=can_execute_var,
-        ).grid(row=3, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        ).grid(row=6, column=0, columnspan=2, sticky='w', padx=8, pady=6)
         tk.Checkbutton(
             dialog,
             text='Log when the command runs (injects ILogger when needed)',
             variable=generate_log_var,
-        ).grid(row=4, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        ).grid(row=7, column=0, columnspan=2, sticky='w', padx=8, pady=6)
         tk.Checkbutton(
             dialog,
             text='Break into the debugger when one is attached',
             variable=breakpoint_var,
-        ).grid(row=5, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        ).grid(row=8, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+
+        def update_action_fields(*_args):
+            action = COMMAND_ACTIONS[action_var.get()]
+            target_combo.config(state='disabled' if action == 'custom' else 'readonly')
+            value_entry.config(state=tk.NORMAL if action == 'set' else tk.DISABLED)
+
+        action_combo.bind('<<ComboboxSelected>>', update_action_fields)
+        update_action_fields()
         dialog.columnconfigure(1, weight=1)
 
         result = {}
@@ -3066,7 +3166,7 @@ class PluginGeneratorApp(tk.Tk):
         def on_ok():
             existing_names = {spec['name'] for spec in self.command_specs if spec['name'] != editing_name}
             try:
-                result['spec'] = build_command_spec(
+                command_spec = build_command_spec(
                     name_var.get(),
                     button_label_var.get(),
                     include_button_var.get(),
@@ -3074,14 +3174,19 @@ class PluginGeneratorApp(tk.Tk):
                     can_execute_var.get(),
                     generate_log_var.get(),
                     breakpoint_var.get(),
+                    COMMAND_ACTIONS[action_var.get()],
+                    target_property_var.get(),
+                    action_value_var.get(),
                 )
+                validate_command_actions([command_spec], self.display_property_specs)
+                result['spec'] = command_spec
             except ValueError as error:
                 messagebox.showerror('Invalid Command', str(error), parent=dialog)
                 return
             dialog.destroy()
 
         button_frame = tk.Frame(dialog)
-        button_frame.grid(row=6, column=0, columnspan=2, pady=10)
+        button_frame.grid(row=9, column=0, columnspan=2, pady=10)
         tk.Button(button_frame, text='OK', command=on_ok, width=10).pack(side=tk.LEFT, padx=4)
         tk.Button(button_frame, text='Cancel', command=dialog.destroy, width=10).pack(side=tk.LEFT, padx=4)
         dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)

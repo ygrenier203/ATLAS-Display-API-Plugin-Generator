@@ -17,6 +17,7 @@ from tools.PluginGenerator.gui import (
     build_command_handler,
     build_command_initializer,
     build_command_spec,
+    validate_command_actions,
     build_status_state,
     build_lifecycle_hooks,
     build_basic_layout_content,
@@ -274,6 +275,47 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('if (Debugger.IsAttached)', source)
         self.assertIn('Debugger.Break();', source)
 
+    def test_command_can_toggle_boolean_property(self):
+        properties = [build_display_property_spec('Enabled', property_type='bool')]
+        command = build_command_spec('ToggleEnabled', action='toggle', target_property='Enabled')
+
+        validate_command_actions([command], properties)
+        source = build_command_handler(command, display_properties=properties)
+
+        self.assertIn('this.Enabled = !this.Enabled;', source)
+        self.assertNotIn('TODO: Implement', source)
+
+    def test_commands_can_set_reset_increment_and_decrement_properties(self):
+        properties = [build_display_property_spec('Count', property_type='int', default_value='5')]
+        cases = [
+            ('SetCount', 'set', '12', 'this.Count = 12;'),
+            ('ResetCount', 'reset', '', 'this.Count = 5;'),
+            ('IncrementCount', 'increment', '', 'this.Count = this.Count + 1;'),
+            ('DecrementCount', 'decrement', '', 'this.Count = this.Count - 1;'),
+        ]
+        for name, action, value, expected in cases:
+            with self.subTest(action=action):
+                command = build_command_spec(
+                    name, action=action, target_property='Count', action_value=value
+                )
+                validate_command_actions([command], properties)
+                self.assertIn(expected, build_command_handler(command, display_properties=properties))
+
+    def test_automatic_command_actions_validate_property_compatibility(self):
+        text_property = build_display_property_spec('Title')
+        read_only_property = build_display_property_spec('Total', property_type='int', read_only=True)
+
+        with self.assertRaisesRegex(ValueError, 'Boolean'):
+            validate_command_actions(
+                [build_command_spec('ToggleTitle', action='toggle', target_property='Title')],
+                [text_property],
+            )
+        with self.assertRaisesRegex(ValueError, 'read-only'):
+            validate_command_actions(
+                [build_command_spec('IncrementTotal', action='increment', target_property='Total')],
+                [read_only_property],
+            )
+
     def test_command_button_escapes_xaml_text(self):
         spec = build_command_spec('Export', 'Save & Close')
 
@@ -431,6 +473,23 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('private readonly ILogger logger;', viewmodel)
         self.assertIn('this.logger.Trace("Command Recalculate executed.");', viewmodel)
         self.assertIn('Debugger.Break();', viewmodel)
+
+    def test_basic_plugin_generates_automatic_toggle_handler(self):
+        enabled = build_display_property_spec('Enabled', property_type='bool', default_value='false')
+        toggle = build_command_spec(
+            'ToggleEnabled', action='toggle', target_property='Enabled'
+        )
+        target = self.generate(
+            include_parameters=False,
+            display_property_specs=[enabled],
+            command_specs=[toggle],
+        )
+        viewmodel = (
+            target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('private void OnToggleEnabled()', viewmodel)
+        self.assertIn('this.Enabled = !this.Enabled;', viewmodel)
 
     def test_dll_dependencies_are_classified_copied_and_referenced(self):
         with tempfile.TemporaryDirectory() as dependency_directory:
