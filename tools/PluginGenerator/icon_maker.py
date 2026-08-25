@@ -229,7 +229,7 @@ def create_icon_png(path, size=16, background='#20242B', foreground='#27B5E8', s
     return path
 
 
-def open_icon_maker(parent, initial_directory='', save_path=None):
+def open_icon_maker(parent, initial_directory='', save_path=None, on_saved=None):
     import tkinter as tk
     from tkinter import colorchooser, filedialog, messagebox, ttk
 
@@ -367,6 +367,8 @@ def open_icon_maker(parent, initial_directory='', save_path=None):
             return
         create_icon_png(path, int(size_var.get()), background_var.get(), foreground_var.get(), symbol_var.get())
         result['path'] = path
+        if on_saved:
+            on_saved(path)
         dialog.destroy()
 
     buttons = tk.Frame(dialog)

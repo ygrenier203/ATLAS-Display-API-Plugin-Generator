@@ -2812,16 +2812,15 @@ class PluginGeneratorApp(tk.Tk):
 
         self.clear_generated_icon_temp_directory()
         temporary_directory = tempfile.mkdtemp(prefix='PluginGeneratorIcon-')
+        self.generated_icon_temp_directory = temporary_directory
         path = open_icon_maker(
             self,
             temporary_directory,
             os.path.join(temporary_directory, 'icon.png'),
+            self.set_icon_path,
         )
-        if path:
-            self.generated_icon_temp_directory = temporary_directory
-            self.set_icon_path(path)
-        else:
-            shutil.rmtree(temporary_directory, ignore_errors=True)
+        if not path:
+            self.clear_generated_icon_temp_directory()
 
     def set_icon_path(self, path):
         self.icon_var.set(os.path.abspath(path))
