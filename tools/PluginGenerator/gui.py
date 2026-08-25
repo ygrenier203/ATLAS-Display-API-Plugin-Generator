@@ -39,6 +39,7 @@ def build_generation_summary(name, behavior, include_view, atlas_parameters, dis
     files = [
         f'{plugin_name}.sln',
         f'{plugin_name}/{plugin_name}.csproj',
+        f'{plugin_name}/{plugin_name}.csproj.user',
         f'{plugin_name}/PluginModule.cs',
         f'{plugin_name}/{plugin_name}ViewModel.cs',
         f'{plugin_name}/Properties/AssemblyInfo.cs',
@@ -899,6 +900,14 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyProduct("ATLAS Display Plugin")]
 [assembly: ComVisible(false)]
 [assembly: Guid("{assembly_guid}")]
+'''
+
+DEBUG_USER_SETTINGS_TEMPLATE = r'''<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+    <PropertyGroup Condition="'$(Configuration)|$(Platform)' == 'Debug|x64'">
+        <StartAction>Program</StartAction>
+        <StartProgram>{atlas_host_path}</StartProgram>
+    </PropertyGroup>
+</Project>
 '''
 
 BASIC_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
@@ -1826,6 +1835,9 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
 
     files = {
         f'{name}.csproj': csproj,
+        f'{name}.csproj.user': DEBUG_USER_SETTINGS_TEMPLATE.format(
+            atlas_host_path=r'C:\Program Files\McLaren Applied Technologies\ATLAS 10\MAT.Atlas.Host.exe',
+        ),
         os.path.join('Properties', 'AssemblyInfo.cs'): ASSEMBLY_INFO_TEMPLATE.format(
             title=name,
             description=escape_csharp_string(description),
