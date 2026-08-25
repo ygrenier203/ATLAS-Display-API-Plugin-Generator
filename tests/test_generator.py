@@ -108,12 +108,12 @@ class ParameterAndPropertyTests(unittest.TestCase):
             item_field_specs=[build_item_field_spec('Value:double')],
         )
 
-        self.assertIn('Plugin: DemoPlugin', summary)
+        self.assertIn('Plugin: DemoCustomPlugin', summary)
         self.assertIn('View: yes (table)', summary)
         self.assertIn('Display properties: 1', summary)
         self.assertIn('Commands: 1', summary)
         self.assertIn('lifecycle hooks', summary)
-        self.assertIn('DemoPlugin/ReadingViewModel.cs', summary)
+        self.assertIn('DemoCustomPlugin/ReadingViewModel.cs', summary)
 
     def test_preset_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
