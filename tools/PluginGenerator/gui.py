@@ -3,13 +3,16 @@ import re
 import json
 import math
 import html
+import ctypes
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import shutil
 import subprocess
+import sys
 import uuid
 
 PRESET_VERSION = 1
+DEFAULT_ATLAS_INSTALL_DIRECTORY = r'C:\Program Files\McLaren Applied Technologies\ATLAS 10'
 
 
 def save_preset(path, configuration):
@@ -30,11 +33,141 @@ def load_preset(path):
     return configuration
 
 
+def list_deployed_plugins(atlas_install_directory):
+    candidates = []
+    roots = [atlas_install_directory, os.path.join(atlas_install_directory, 'CustomDLLs')]
+    for root in roots:
+        if not os.path.isdir(root):
+            continue
+        for filename in os.listdir(root):
+            lowered = filename.lower()
+            if not lowered.endswith('customplugin.dll') or lowered.startswith('mat.atlas.plugins.'):
+                continue
+            path = os.path.join(root, filename)
+            if os.path.isfile(path):
+                candidates.append(path)
+    return sorted(set(candidates), key=lambda path: os.path.basename(path).lower())
+
+
+def plugin_cleanup_files(plugin_path):
+    base, _ = os.path.splitext(plugin_path)
+    candidates = [
+        plugin_path,
+        f'{base}.pdb',
+        f'{base}.xml',
+        f'{base}.deps.json',
+        f'{base}.runtimeconfig.json',
+        f'{plugin_path}.config',
+    ]
+    return [path for path in candidates if os.path.isfile(path)]
+
+
+def remove_deployed_plugin_files(plugin_paths):
+    for plugin_path in plugin_paths:
+        for path in plugin_cleanup_files(plugin_path):
+            os.remove(path)
+
+
+def request_elevated_plugin_removal(plugin_paths):
+    arguments = subprocess.list2cmdline([
+        os.path.abspath(__file__),
+        '--remove-deployed-plugin-files',
+        *plugin_paths,
+    ])
+    result = ctypes.windll.shell32.ShellExecuteW(
+        None,
+        'runas',
+        sys.executable,
+        arguments,
+        None,
+        1,
+    )
+    if result <= 32:
+        raise RuntimeError('Administrator permission was not granted.')
+
+
+def is_managed_dll(path):
+    try:
+        with open(path, 'rb') as stream:
+            if stream.read(2) != b'MZ':
+                return False
+            stream.seek(0x3C)
+            pe_offset = int.from_bytes(stream.read(4), 'little')
+            stream.seek(pe_offset)
+            if stream.read(4) != b'PE\0\0':
+                return False
+            stream.seek(pe_offset + 24)
+            magic = int.from_bytes(stream.read(2), 'little')
+            data_directory_offset = 96 if magic == 0x10B else 112 if magic == 0x20B else None
+            if data_directory_offset is None:
+                return False
+            stream.seek(pe_offset + 24 + data_directory_offset + (14 * 8))
+            cli_header_rva = int.from_bytes(stream.read(4), 'little')
+            cli_header_size = int.from_bytes(stream.read(4), 'little')
+            return cli_header_rva != 0 and cli_header_size != 0
+    except (OSError, ValueError):
+        return False
+
+
+def build_dll_spec(path, source='custom', existing_names=None):
+    path = os.path.abspath(path or '')
+    if not os.path.isfile(path) or os.path.splitext(path)[1].lower() != '.dll':
+        raise ValueError('Select a valid DLL file.')
+    name = os.path.basename(path)
+    if existing_names and name.lower() in {item.lower() for item in existing_names}:
+        raise ValueError(f'A DLL named "{name}" is already selected.')
+    if source not in ('atlas', 'custom'):
+        raise ValueError(f'Unknown DLL source: {source}')
+    return {
+        'name': name,
+        'path': path,
+        'kind': 'managed' if is_managed_dll(path) else 'native',
+        'source': source,
+    }
+
+
+def build_dll_project_items(dll_specs):
+    items = []
+    for spec in dll_specs:
+        name = html.escape(spec['name'], quote=True)
+        folder = 'Managed' if spec['kind'] == 'managed' else 'Native'
+        hint_path = f'Dependencies\\{folder}\\{name}'
+        if spec['kind'] == 'managed':
+            assembly_name = html.escape(os.path.splitext(spec['name'])[0], quote=True)
+            private = 'true' if spec['source'] == 'custom' else 'false'
+            items.append(
+                f'    <Reference Include="{assembly_name}">\n'
+                f'      <HintPath>{hint_path}</HintPath>\n'
+                f'      <Private>{private}</Private>\n'
+                '    </Reference>'
+            )
+        elif spec['source'] == 'custom':
+            items.append(
+                f'    <Content Include="{hint_path}">\n'
+                f'      <TargetPath>{name}</TargetPath>\n'
+                '      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>\n'
+                '    </Content>'
+            )
+    if not items:
+        return ''
+    return '  <ItemGroup>\n' + '\n'.join(items) + '\n  </ItemGroup>\n'
+
+
+def normalize_dll_specs(dll_specs):
+    normalized = []
+    names = set()
+    for spec in dll_specs or []:
+        normalized_spec = build_dll_spec(spec.get('path'), spec.get('source', 'custom'), names)
+        normalized.append(normalized_spec)
+        names.add(normalized_spec['name'])
+    return normalized
+
+
 def build_generation_summary(name, behavior, include_view, atlas_parameters, display_property_specs,
                              command_specs, service_names, basic_layout='text', include_status_state=False,
                              include_lifecycle_hooks=False, include_session_notifications=False,
                              include_item_collection=False, collection_name='Items',
-                             item_class_name='ItemViewModel', item_field_specs=None):
+                             item_class_name='ItemViewModel', item_field_specs=None, dll_specs=None):
     plugin_name = normalize_plugin_name(name)
     files = [
         f'{plugin_name}.sln',
@@ -59,6 +192,10 @@ def build_generation_summary(name, behavior, include_view, atlas_parameters, dis
     uses_collection = include_item_collection or (behavior == BEHAVIOR_BASIC and basic_layout in ('list', 'table'))
     if uses_collection:
         files.append(f'{plugin_name}/{item_class_name}.cs')
+    for spec in dll_specs or []:
+        if spec['kind'] == 'managed' or spec['source'] == 'custom':
+            folder = 'Managed' if spec['kind'] == 'managed' else 'Native'
+            files.append(f'{plugin_name}/Dependencies/{folder}/{spec["name"]}')
 
     features = []
     if include_status_state:
@@ -79,6 +216,7 @@ def build_generation_summary(name, behavior, include_view, atlas_parameters, dis
         f'Display properties: {len(display_property_specs)}',
         f'Commands: {len(command_specs)}',
         f'Injected services: {", ".join(service_names) if service_names else "none"}',
+        f'DLL dependencies: {len(dll_specs or [])} ({sum(spec["source"] == "custom" for spec in dll_specs or [])} added)',
         f'Optional features: {", ".join(features) if features else "none"}',
         '',
         'Files:',
@@ -108,8 +246,8 @@ CS_PROJ_TEMPLATE = r'''<Project Sdk="Microsoft.NET.Sdk">
     <PackageReference Include="MAT.OCS.Core" Version="*" />
     <PackageReference Include="System.Reactive" Version="4.4.1" />
   </ItemGroup>
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(DeployAtlasPlugin)' == 'true'">
-    <Exec Command="python &quot;$(SolutionDir)scripts\deploy.py&quot; &quot;$(TargetDir)$(ProjectName).dll&quot;" />
+{dll_items}  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(DeployAtlasPlugin)' == 'true'">
+        <Exec Command="python &quot;$(SolutionDir)scripts\deploy.py&quot; &quot;$(TargetDir)$(ProjectName).dll&quot;{deploy_dependency_args}" />
   </Target>
 </Project>
 '''
@@ -133,8 +271,8 @@ def is_elevated():
         return False
 
 
-def relaunch_elevated(dll_path):
-    parameters = subprocess.list2cmdline([__file__, str(dll_path)])
+def relaunch_elevated(dll_paths):
+    parameters = subprocess.list2cmdline([__file__, *[str(path) for path in dll_paths]])
     result = ctypes.windll.shell32.ShellExecuteW(
         None,
         'runas',
@@ -148,24 +286,26 @@ def relaunch_elevated(dll_path):
     return 0
 
 
-def deploy(dll_path):
-    dll_path = Path(dll_path).resolve()
-    if not dll_path.is_file():
-        raise FileNotFoundError(f'Build output not found: {{dll_path}}')
+def deploy(dll_paths):
+    dll_paths = [Path(path).resolve() for path in dll_paths]
+    missing_paths = [path for path in dll_paths if not path.is_file()]
+    if missing_paths:
+        raise FileNotFoundError(f'Build output not found: {{missing_paths[0]}}')
     if not is_elevated():
-        return relaunch_elevated(dll_path)
+        return relaunch_elevated(dll_paths)
     DESTINATION.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(dll_path, DESTINATION / dll_path.name)
-    print(f'Deployed {{dll_path.name}} to {{DESTINATION}}')
+    for dll_path in dll_paths:
+        shutil.copy2(dll_path, DESTINATION / dll_path.name)
+        print(f'Deployed {{dll_path.name}} to {{DESTINATION}}')
     return 0
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Deploy a built ATLAS display plugin.')
-    parser.add_argument('dll_path')
+    parser.add_argument('dll_paths', nargs='+')
     arguments = parser.parse_args()
     try:
-        sys.exit(deploy(arguments.dll_path))
+        sys.exit(deploy(arguments.dll_paths))
     except (FileNotFoundError, RuntimeError, OSError) as error:
         print(f'Deployment failed: {{error}}', file=sys.stderr)
         sys.exit(1)
@@ -1132,7 +1272,7 @@ def normalize_plugin_name(name):
         raise ValueError('Plugin name must be a valid C# identifier (letters, numbers, and underscores only).')
     # ATLAS only loads assemblies whose name contains "Plugin".
     if 'plugin' not in name.lower():
-        name += 'Plugin'
+        name += 'CustomPlugin'
     return name
 
 
@@ -1672,7 +1812,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     include_status_state=False, include_lifecycle_hooks=False,
                     include_session_notifications=False, include_item_collection=False,
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
-                    item_field_specs=None):
+                    item_field_specs=None, dll_specs=None, atlas_install_directory=None):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -1687,6 +1827,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     atlas_parameters = validated_atlas_parameters
     display_property_specs = list(display_property_specs or [])
     command_specs = list(command_specs or [])
+    dll_specs = normalize_dll_specs(dll_specs)
     validate_display_property_actions(display_property_specs, behavior)
     if atlas_parameters and not include_parameters:
         raise ValueError('ATLAS parameters require a data behavior.')
@@ -1712,6 +1853,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError('Maximum parameter count cannot be lower than the number of ATLAS parameters.')
     namespace = name
     workspace_root = os.path.abspath(workspace_root or default_workspace_root())
+    atlas_install_directory = os.path.abspath(atlas_install_directory or DEFAULT_ATLAS_INSTALL_DIRECTORY)
     icon_path = validate_icon_path(icon_path)
     icon_filename = os.path.basename(icon_path)
     target = os.path.join(base_out, name)
@@ -1720,12 +1862,29 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     resources_dir = os.path.join(project_directory, 'Resources')
     os.makedirs(resources_dir, exist_ok=True)
     shutil.copyfile(icon_path, os.path.join(resources_dir, icon_filename))
+    for spec in dll_specs:
+        if spec['kind'] == 'native' and spec['source'] == 'atlas':
+            continue
+        folder = 'Managed' if spec['kind'] == 'managed' else 'Native'
+        dependency_directory = os.path.join(project_directory, 'Dependencies', folder)
+        os.makedirs(dependency_directory, exist_ok=True)
+        shutil.copy2(spec['path'], os.path.join(dependency_directory, spec['name']))
 
     project_guid = str(uuid.uuid4()).upper()
     assembly_guid = str(uuid.uuid4()).upper()
     description = description or f'{name} ATLAS display plugin'
 
-    csproj = CS_PROJ_TEMPLATE.format(project_guid=project_guid, icon_filename=icon_filename)
+    deploy_dependency_args = ''.join(
+        f' &quot;$(TargetDir){html.escape(spec["name"], quote=True)}&quot;'
+        for spec in dll_specs
+        if spec['source'] == 'custom'
+    )
+    csproj = CS_PROJ_TEMPLATE.format(
+        project_guid=project_guid,
+        icon_filename=icon_filename,
+        dll_items=build_dll_project_items(dll_specs),
+        deploy_dependency_args=deploy_dependency_args,
+    )
     library_project_guid = str(uuid.uuid4()).upper()
     library_project_entry = ''
     library_configurations = ''
@@ -1836,7 +1995,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     files = {
         f'{name}.csproj': csproj,
         f'{name}.csproj.user': DEBUG_USER_SETTINGS_TEMPLATE.format(
-            atlas_host_path=r'C:\Program Files\McLaren Applied Technologies\ATLAS 10\MAT.Atlas.Host.exe',
+            atlas_host_path=os.path.join(atlas_install_directory, 'MAT.Atlas.Host.exe'),
         ),
         os.path.join('Properties', 'AssemblyInfo.cs'): ASSEMBLY_INFO_TEMPLATE.format(
             title=name,
@@ -1934,7 +2093,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     scripts_dir = os.path.join(target, 'scripts')
     os.makedirs(scripts_dir, exist_ok=True)
     deploy_py = DEPLOY_PY_TEMPLATE.format(
-        atlas_install_path=r'C:\Program Files\McLaren Applied Technologies\ATLAS 10',
+        atlas_install_path=atlas_install_directory,
     )
     with open(os.path.join(scripts_dir, 'deploy.py'), 'w', encoding='utf-8', newline='') as stream:
         stream.write(deploy_py)
@@ -2013,6 +2172,49 @@ class PluginGeneratorApp(tk.Tk):
         tk.Entry(output_frame, textvariable=self.icon_var, width=45).grid(row=2, column=1, sticky='ew', padx=8)
         tk.Button(output_frame, text='Browse', command=self.browse_icon).grid(row=2, column=2, padx=6)
         tk.Button(output_frame, text='Create...', command=self.create_icon).grid(row=2, column=3, padx=6)
+
+        tk.Label(output_frame, text='ATLAS install folder:').grid(row=3, column=0, sticky='w', pady=6)
+        self.atlas_install_var = tk.StringVar(value=settings.get(
+            'atlas_install_directory',
+            DEFAULT_ATLAS_INSTALL_DIRECTORY,
+        ))
+        tk.Entry(output_frame, textvariable=self.atlas_install_var, width=45).grid(
+            row=3, column=1, sticky='ew', padx=8
+        )
+        tk.Button(output_frame, text='Browse', command=self.browse_atlas_install).grid(row=3, column=2, padx=6)
+
+        # === Deployed Plugins ===
+        dll_frame = tk.LabelFrame(scrollable_frame, text='Deployed Plugins', padx=8, pady=8)
+        dll_frame.pack(fill=tk.BOTH, expand=True, pady=8)
+        tk.Label(
+            dll_frame,
+            text='Lists custom plugin DLLs in the configured ATLAS folder. Built-in MAT.Atlas.Plugins assemblies are excluded.',
+            font=('Arial', 8, 'italic'), justify='left', wraplength=600,
+        ).pack(anchor='w', pady=(0, 4))
+
+        self.deployed_plugin_tree = ttk.Treeview(
+            dll_frame,
+            columns=('name', 'location'),
+            show='headings',
+            height=5,
+            selectmode='extended',
+        )
+        self.deployed_plugin_tree.heading('name', text='Plugin DLL')
+        self.deployed_plugin_tree.heading('location', text='Location')
+        self.deployed_plugin_tree.column('name', width=220, anchor='w')
+        self.deployed_plugin_tree.column('location', width=460, anchor='w')
+        self.deployed_plugin_tree.pack(fill=tk.BOTH, expand=True, pady=4)
+        self.dll_specs = []
+
+        dll_button_frame = tk.Frame(dll_frame)
+        dll_button_frame.pack(fill=tk.X, pady=4)
+        tk.Button(dll_button_frame, text='Refresh', command=self.refresh_deployed_plugins).pack(
+            side=tk.LEFT, padx=4
+        )
+        tk.Button(dll_button_frame, text='Remove Selected...', command=self.remove_selected_deployed_plugins).pack(
+            side=tk.LEFT, padx=4
+        )
+        self.refresh_deployed_plugins()
         
         # === Plugin Behavior ===
         config_frame = tk.LabelFrame(scrollable_frame, text='Plugin Behavior', padx=8, pady=8)
@@ -2280,6 +2482,177 @@ class PluginGeneratorApp(tk.Tk):
         if path:
             self.icon_var.set(path)
 
+    def browse_atlas_install(self):
+        initial = self.atlas_install_var.get().strip()
+        if not os.path.isdir(initial):
+            initial = os.path.dirname(initial) if initial else os.getcwd()
+        path = filedialog.askdirectory(title='Select ATLAS installation folder', initialdir=initial)
+        if path:
+            self.atlas_install_var.set(path)
+
+    def refresh_deployed_plugins(self):
+        self.deployed_plugin_tree.delete(*self.deployed_plugin_tree.get_children())
+        atlas_directory = self.atlas_install_var.get().strip()
+        for plugin_path in list_deployed_plugins(atlas_directory):
+            self.deployed_plugin_tree.insert('', tk.END, values=(
+                os.path.basename(plugin_path),
+                plugin_path,
+            ))
+
+    def remove_selected_deployed_plugins(self):
+        selected = self.deployed_plugin_tree.selection()
+        if not selected:
+            messagebox.showinfo('Deployed Plugins', 'Select one or more custom plugin DLLs to remove.')
+            return
+        plugin_paths = [self.deployed_plugin_tree.item(item, 'values')[1] for item in selected]
+        cleanup_paths = [path for plugin_path in plugin_paths for path in plugin_cleanup_files(plugin_path)]
+        message = 'The following files will be removed from the ATLAS installation:\n\n'
+        message += '\n'.join(f'  - {path}' for path in cleanup_paths)
+        message += '\n\nWindows will request administrator permission. Continue?'
+        if not messagebox.askyesno('Remove Deployed Plugins', message):
+            return
+        try:
+            request_elevated_plugin_removal(plugin_paths)
+        except RuntimeError as error:
+            messagebox.showerror('Remove Deployed Plugins', str(error))
+            return
+        self.after(1000, self.refresh_deployed_plugins)
+
+    def refresh_dll_tree(self):
+        self.dll_tree.delete(*self.dll_tree.get_children())
+        for spec in self.dll_specs:
+            self.dll_tree.insert('', tk.END, values=(
+                spec['name'],
+                spec['kind'].title(),
+                'ATLAS-installed' if spec['source'] == 'atlas' else 'Added',
+                spec['path'],
+            ))
+
+    def _append_dll_paths(self, paths, source):
+        existing_names = {spec['name'] for spec in self.dll_specs}
+        errors = []
+        for path in paths:
+            try:
+                spec = build_dll_spec(path, source, existing_names)
+            except ValueError as error:
+                errors.append(str(error))
+                continue
+            self.dll_specs.append(spec)
+            existing_names.add(spec['name'])
+        self.refresh_dll_tree()
+        if errors:
+            messagebox.showwarning('DLL Manager', '\n'.join(errors))
+
+    def add_custom_dlls(self):
+        paths = filedialog.askopenfilenames(
+            title='Add custom DLLs',
+            filetypes=[('DLL files', '*.dll')],
+        )
+        if paths:
+            self._append_dll_paths(paths, 'custom')
+
+    def remove_selected_dlls(self):
+        selections = self.dll_tree.selection()
+        if not selections:
+            messagebox.showinfo('DLL Manager', 'Select one or more DLLs to remove.')
+            return
+        indexes = sorted((self.dll_tree.index(item) for item in selections), reverse=True)
+        for index in indexes:
+            del self.dll_specs[index]
+        self.refresh_dll_tree()
+
+    def add_atlas_dlls(self):
+        atlas_directory = self.atlas_install_var.get().strip()
+        if not os.path.isdir(atlas_directory):
+            messagebox.showerror('DLL Manager', 'Select a valid ATLAS installation folder first.')
+            return
+
+        dialog = tk.Toplevel(self)
+        dialog.title('Add DLLs from ATLAS')
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.geometry('900x600')
+        dialog.minsize(650, 400)
+
+        filter_frame = tk.Frame(dialog)
+        filter_frame.pack(fill=tk.X, padx=8, pady=8)
+        tk.Label(filter_frame, text='Filter:').pack(side=tk.LEFT)
+        filter_var = tk.StringVar()
+        tk.Entry(filter_frame, textvariable=filter_var).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8)
+        kind_var = tk.StringVar(value='All')
+        ttk.Combobox(
+            filter_frame,
+            textvariable=kind_var,
+            values=('All', 'Managed', 'Native'),
+            state='readonly',
+            width=12,
+        ).pack(side=tk.LEFT)
+
+        tree = ttk.Treeview(
+            dialog,
+            columns=('name', 'kind', 'relative_path'),
+            show='headings',
+            selectmode='extended',
+        )
+        tree.heading('name', text='DLL')
+        tree.heading('kind', text='Type')
+        tree.heading('relative_path', text='ATLAS-relative path')
+        tree.column('name', width=220, anchor='w')
+        tree.column('kind', width=90, anchor='w')
+        tree.column('relative_path', width=500, anchor='w')
+        tree.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+        available = []
+        dialog.config(cursor='watch')
+        dialog.update_idletasks()
+        for directory, child_directories, filenames in os.walk(atlas_directory):
+            child_directories[:] = [name for name in child_directories if name.lower() not in ('obj',)]
+            for filename in filenames:
+                if filename.lower().endswith('.dll'):
+                    path = os.path.join(directory, filename)
+                    available.append({
+                        'name': filename,
+                        'path': path,
+                        'kind': 'managed' if is_managed_dll(path) else 'native',
+                        'relative_path': os.path.relpath(path, atlas_directory),
+                    })
+        available.sort(key=lambda item: (item['name'].lower(), item['relative_path'].lower()))
+        dialog.config(cursor='')
+
+        def refresh_available(*_):
+            tree.delete(*tree.get_children())
+            search = filter_var.get().strip().lower()
+            selected_kind = kind_var.get().lower()
+            for index, spec in enumerate(available):
+                if selected_kind != 'all' and spec['kind'] != selected_kind:
+                    continue
+                searchable = f'{spec["name"]} {spec["relative_path"]}'.lower()
+                if search and search not in searchable:
+                    continue
+                tree.insert('', tk.END, iid=str(index), values=(
+                    spec['name'],
+                    spec['kind'].title(),
+                    spec['relative_path'],
+                ))
+
+        def add_selected():
+            selected = [available[int(item)] for item in tree.selection()]
+            if not selected:
+                messagebox.showinfo('DLL Manager', 'Select one or more DLLs to add.', parent=dialog)
+                return
+            self._append_dll_paths([spec['path'] for spec in selected], 'atlas')
+            dialog.destroy()
+
+        filter_var.trace_add('write', refresh_available)
+        kind_var.trace_add('write', refresh_available)
+        tree.bind('<Double-1>', lambda event: add_selected())
+        refresh_available()
+
+        button_frame = tk.Frame(dialog)
+        button_frame.pack(fill=tk.X, padx=8, pady=(0, 8))
+        tk.Button(button_frame, text='Add Selected', command=add_selected).pack(side=tk.LEFT, padx=4)
+        tk.Button(button_frame, text='Cancel', command=dialog.destroy).pack(side=tk.LEFT, padx=4)
+
     def create_icon(self):
         from .icon_maker import open_icon_maker
 
@@ -2528,7 +2901,9 @@ class PluginGeneratorApp(tk.Tk):
         self.refresh_property_tree()
         self.command_specs = []
         self.refresh_command_tree()
+        self.refresh_deployed_plugins()
         self.icon_var.set('')
+        self.atlas_install_var.set(DEFAULT_ATLAS_INSTALL_DIRECTORY)
         self.parameter_max_var.set('100')
         self.add_view_var.set(True)
         self.behavior_var.set(BEHAVIOR_CURRENT_VALUE)
@@ -2574,12 +2949,13 @@ class PluginGeneratorApp(tk.Tk):
                 getattr(self, widget_name).config(state=tk.NORMAL if not parameters_enabled else tk.DISABLED)
 
     def clear_saved_paths(self):
-        if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output and library paths?'):
+        if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output, library, icon, and ATLAS paths?'):
             return
         clear_settings()
         self.out_var.set('')
         self.library_var.set('')
         self.icon_var.set('')
+        self.atlas_install_var.set(DEFAULT_ATLAS_INSTALL_DIRECTORY)
         messagebox.showinfo('Clear Saved Paths', 'Persisted paths were cleared.')
 
     def build_preset_configuration(self):
@@ -2613,8 +2989,10 @@ class PluginGeneratorApp(tk.Tk):
         self.atlas_parameter_text.insert('1.0', '\n'.join(configuration.get('atlas_parameters', [])))
         self.display_property_specs = list(configuration.get('display_properties', []))
         self.command_specs = list(configuration.get('commands', []))
+        self.dll_specs = []
         self.refresh_property_tree()
         self.refresh_command_tree()
+        self.refresh_deployed_plugins()
         selected_services = set(configuration.get('services', []))
         for name, var in self.service_vars.items():
             var.set(name in selected_services)
@@ -2700,6 +3078,7 @@ class PluginGeneratorApp(tk.Tk):
                 collection_name=self.collection_name_var.get().strip(),
                 item_class_name=self.item_class_name_var.get().strip(),
                 item_field_specs=item_field_specs,
+                dll_specs=self.dll_specs,
             )
             if not messagebox.askokcancel('Generation Preview', summary):
                 return
@@ -2727,11 +3106,14 @@ class PluginGeneratorApp(tk.Tk):
                 library_project=library_project,
                 icon_path=icon_path,
                 service_names=service_names,
+                dll_specs=self.dll_specs,
+                atlas_install_directory=self.atlas_install_var.get().strip(),
             )
             save_settings({
                 'output_folder': base_out,
                 'library_project': library_project,
                 'icon_path': icon_path,
+                'atlas_install_directory': self.atlas_install_var.get().strip(),
             })
 
             build_succeeded = False
@@ -2773,4 +3155,7 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == '--remove-deployed-plugin-files':
+        remove_deployed_plugin_files(sys.argv[2:])
+    else:
+        main()
