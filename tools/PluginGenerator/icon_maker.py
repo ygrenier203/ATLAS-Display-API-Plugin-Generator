@@ -6,6 +6,8 @@ import zlib
 ICON_SYMBOLS = (
     'graph', 'pulse', 'gauge', 'grid',
     'checkered-flag', 'steering-wheel', 'tyre', 'stopwatch', 'race-car',
+    'helmet', 'trophy', 'pit-lane', 'track-map', 'brake-disc',
+    'suspension', 'engine', 'fuel', 'gear', 'lap-delta',
 )
 
 
@@ -143,7 +145,7 @@ def render_icon_pixels(size, background, foreground, symbol):
         _rectangle(pixels, size, middle - thickness, margin - thickness, middle + thickness + 1, margin + thickness, foreground)
         _line(pixels, size, center, (middle, center[1] - (radius // 2)), foreground, thickness)
         _line(pixels, size, center, (middle + (radius // 2), center[1]), foreground, thickness)
-    else:
+    elif symbol == 'race-car':
         body_left = margin
         body_right = size - margin
         body_top = size * 2 // 5
@@ -153,6 +155,58 @@ def render_icon_pixels(size, background, foreground, symbol):
         wheel_radius = max(1, size // 10)
         _circle(pixels, size, (body_left, body_bottom), wheel_radius, foreground, filled=True)
         _circle(pixels, size, (body_right - 1, body_bottom), wheel_radius, foreground, filled=True)
+    elif symbol == 'helmet':
+        radius = (size // 2) - margin
+        _circle(pixels, size, (middle, middle), radius, foreground, filled=True)
+        _rectangle(pixels, size, middle, middle - thickness, size - margin, middle + thickness + 1, background)
+        _rectangle(pixels, size, middle, middle + thickness, size - margin, size - margin, background)
+    elif symbol == 'trophy':
+        _rectangle(pixels, size, middle - thickness, middle, middle + thickness + 1, size - margin, foreground)
+        _rectangle(pixels, size, size // 3, size - margin, size * 2 // 3, size - margin + thickness, foreground)
+        _rectangle(pixels, size, size // 3, margin, size * 2 // 3, middle, foreground)
+        _circle(pixels, size, (size // 3, size // 3), size // 6, foreground, thickness=thickness)
+        _circle(pixels, size, (size * 2 // 3, size // 3), size // 6, foreground, thickness=thickness)
+    elif symbol == 'pit-lane':
+        _line(pixels, size, (margin, margin), (margin, size - margin), foreground, thickness)
+        _line(pixels, size, (size - margin, margin), (size - margin, size - margin), foreground, thickness)
+        for y in range(margin, size - margin, max(2, size // 5)):
+            _line(pixels, size, (middle, y), (middle, min(size - margin, y + thickness)), foreground, thickness)
+    elif symbol == 'track-map':
+        points = ((margin, middle), (size // 3, margin), (size - margin, size // 3),
+                  (size * 2 // 3, size - margin), (size // 3, size * 2 // 3), (margin, middle))
+        for start, end in zip(points, points[1:]):
+            _line(pixels, size, start, end, foreground, thickness)
+    elif symbol == 'brake-disc':
+        radius = (size // 2) - margin
+        _circle(pixels, size, (middle, middle), radius, foreground, thickness=thickness)
+        _circle(pixels, size, (middle, middle), max(1, radius // 3), foreground, filled=True)
+        for point in ((middle, margin), (middle, size - margin), (margin, middle), (size - margin, middle)):
+            _circle(pixels, size, point, max(1, thickness // 2), foreground, filled=True)
+    elif symbol == 'suspension':
+        step = max(2, (size - margin * 2) // 6)
+        points = [(margin + index * step, margin if index % 2 == 0 else size - margin) for index in range(7)]
+        for start, end in zip(points, points[1:]):
+            _line(pixels, size, start, end, foreground, thickness)
+    elif symbol == 'engine':
+        _rectangle(pixels, size, margin, size // 3, size - margin, size * 2 // 3, foreground)
+        _rectangle(pixels, size, size // 3, margin, size * 2 // 3, size // 3, foreground)
+        _line(pixels, size, (margin, middle), (margin // 2, middle), foreground, thickness)
+        _line(pixels, size, (size - margin, middle), (size - margin // 2, middle), foreground, thickness)
+    elif symbol == 'fuel':
+        _rectangle(pixels, size, margin, margin, size * 2 // 3, size - margin, foreground)
+        _rectangle(pixels, size, margin + thickness, margin + thickness, size * 2 // 3 - thickness, middle, background)
+        _line(pixels, size, (size * 2 // 3, size // 3), (size - margin, middle), foreground, thickness)
+        _line(pixels, size, (size - margin, middle), (size - margin, size - margin), foreground, thickness)
+    elif symbol == 'gear':
+        radius = (size // 2) - margin
+        _circle(pixels, size, (middle, middle), radius, foreground, thickness=max(thickness, size // 8))
+        for start, end in (((middle, margin), (middle, margin // 2)), ((middle, size - margin), (middle, size - margin // 2)),
+                           ((margin, middle), (margin // 2, middle)), ((size - margin, middle), (size - margin // 2, middle))):
+            _line(pixels, size, start, end, foreground, thickness)
+    else:  # lap-delta
+        _line(pixels, size, (margin, middle), (size - margin, middle), foreground, thickness)
+        _line(pixels, size, (middle, margin), (middle, size - margin), foreground, thickness)
+        _line(pixels, size, (margin, size - margin), (size - margin, margin), foreground, thickness)
     return bytes(pixels)
 
 
@@ -206,7 +260,23 @@ def open_icon_maker(parent, initial_directory=''):
         middle = 96
         width = 7
         symbol = symbol_var.get()
-        if symbol == 'graph':
+        if symbol in ICON_SYMBOLS[9:]:
+            try:
+                preview_pixels = render_icon_pixels(16, background, foreground, symbol)
+            except ValueError:
+                return
+            scale = 12
+            for y in range(16):
+                for x in range(16):
+                    offset = ((y * 16) + x) * 4
+                    red, green, blue, alpha = preview_pixels[offset:offset + 4]
+                    if alpha:
+                        color = f'#{red:02X}{green:02X}{blue:02X}'
+                        canvas.create_rectangle(
+                            x * scale, y * scale, (x + 1) * scale, (y + 1) * scale,
+                            fill=color, outline=color,
+                        )
+        elif symbol == 'graph':
             points = (margin, 150, 76, 112, 116, 128, 158, margin)
             canvas.create_line(*points, fill=foreground, width=width, joint='curve')
             for index in range(0, len(points), 2):

@@ -12,6 +12,12 @@ from tools.PluginGenerator.icon_maker import (
 
 
 class IconMakerTests(unittest.TestCase):
+    def test_racing_template_catalog_is_comprehensive(self):
+        self.assertGreaterEqual(len(ICON_SYMBOLS), 19)
+        for symbol in ('helmet', 'trophy', 'pit-lane', 'track-map', 'brake-disc',
+                       'suspension', 'engine', 'fuel', 'gear', 'lap-delta'):
+            self.assertIn(symbol, ICON_SYMBOLS)
+
     def test_hex_colors_support_rgb_and_rgba(self):
         self.assertEqual((32, 36, 43, 255), parse_hex_color('#20242B'))
         self.assertEqual((32, 36, 43, 128), parse_hex_color('20242B80'))
