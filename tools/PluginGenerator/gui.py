@@ -10,6 +10,7 @@ from tkinter import filedialog, messagebox, ttk
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 
 PRESET_VERSION = 1
@@ -2227,6 +2228,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
 class PluginGeneratorApp(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.generated_icon_temp_directory = None
         self.title('ATLAS Display Plugin Generator')
         self.minsize(480, 400)
         self.resizable(True, True)
@@ -2623,6 +2625,7 @@ class PluginGeneratorApp(tk.Tk):
             filetypes=[('PNG image', '*.png')],
         )
         if path:
+            self.clear_generated_icon_temp_directory()
             self.icon_var.set(path)
 
     def browse_atlas_install(self):
@@ -2806,16 +2809,31 @@ class PluginGeneratorApp(tk.Tk):
     def create_icon(self):
         from .icon_maker import open_icon_maker
 
-        initial = self.icon_var.get().strip()
-        if os.path.isfile(initial):
-            initial_directory = os.path.dirname(initial)
-        elif self.out_var.get().strip() and os.path.isdir(self.out_var.get().strip()):
-            initial_directory = self.out_var.get().strip()
-        else:
-            initial_directory = os.getcwd()
-        path = open_icon_maker(self, initial_directory)
+        self.clear_generated_icon_temp_directory()
+        temporary_directory = tempfile.mkdtemp(prefix='PluginGeneratorIcon-')
+        path = open_icon_maker(
+            self,
+            temporary_directory,
+            os.path.join(temporary_directory, 'icon.png'),
+        )
         if path:
+            self.generated_icon_temp_directory = temporary_directory
             self.icon_var.set(path)
+        else:
+            shutil.rmtree(temporary_directory, ignore_errors=True)
+
+    def clear_generated_icon_temp_directory(self):
+        if self.generated_icon_temp_directory:
+            current_icon = self.icon_var.get().strip() if hasattr(self, 'icon_var') else ''
+            temporary_directory = os.path.abspath(self.generated_icon_temp_directory)
+            if current_icon:
+                try:
+                    if os.path.commonpath((temporary_directory, os.path.abspath(current_icon))) == temporary_directory:
+                        self.icon_var.set('')
+                except ValueError:
+                    pass
+            shutil.rmtree(self.generated_icon_temp_directory, ignore_errors=True)
+            self.generated_icon_temp_directory = None
 
     def refresh_property_tree(self):
         self.property_tree.delete(*self.property_tree.get_children())
@@ -3065,6 +3083,7 @@ class PluginGeneratorApp(tk.Tk):
         return result.get('spec')
 
     def reset_form(self):
+        self.clear_generated_icon_temp_directory()
         self.name_var.set('')
         self.description_var.set('')
         self.atlas_parameter_text.delete('1.0', tk.END)
@@ -3290,10 +3309,18 @@ class PluginGeneratorApp(tk.Tk):
                 include_synchronization_context=self.synchronization_context_var.get(),
                 include_object_lock=self.object_lock_var.get(),
             )
+            copied_icon_path = os.path.join(
+                target,
+                os.path.basename(target),
+                'Resources',
+                os.path.basename(icon_path),
+            )
+            self.clear_generated_icon_temp_directory()
+            self.icon_var.set(copied_icon_path)
             save_settings({
                 'output_folder': base_out,
                 'library_project': library_project,
-                'icon_path': icon_path,
+                'icon_path': copied_icon_path,
                 'atlas_install_directory': self.atlas_install_var.get().strip(),
             })
 

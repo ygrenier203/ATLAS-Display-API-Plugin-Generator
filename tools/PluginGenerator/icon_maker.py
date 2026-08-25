@@ -229,7 +229,7 @@ def create_icon_png(path, size=16, background='#20242B', foreground='#27B5E8', s
     return path
 
 
-def open_icon_maker(parent, initial_directory=''):
+def open_icon_maker(parent, initial_directory='', save_path=None):
     import tkinter as tk
     from tkinter import colorchooser, filedialog, messagebox, ttk
 
@@ -353,14 +353,16 @@ def open_icon_maker(parent, initial_directory=''):
         except ValueError as error:
             messagebox.showerror('Invalid Color', str(error), parent=dialog)
             return
-        path = filedialog.asksaveasfilename(
-            parent=dialog,
-            title='Save Plugin Icon',
-            initialdir=initial_directory or None,
-            initialfile='icon.png',
-            defaultextension='.png',
-            filetypes=[('PNG image', '*.png')],
-        )
+        path = save_path
+        if not path:
+            path = filedialog.asksaveasfilename(
+                parent=dialog,
+                title='Save Plugin Icon',
+                initialdir=initial_directory or None,
+                initialfile='icon.png',
+                defaultextension='.png',
+                filetypes=[('PNG image', '*.png')],
+            )
         if not path:
             return
         create_icon_png(path, int(size_var.get()), background_var.get(), foreground_var.get(), symbol_var.get())
