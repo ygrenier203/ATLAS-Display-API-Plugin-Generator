@@ -83,6 +83,18 @@ Use **Save Preset** and **Load Preset** to reuse a generator configuration as a 
 
 Before writing any plugin files, the GUI displays a **Generation Preview** with the selected behavior, layout, feature counts, injected services, optional helpers, collection shape, and expected file list. Cancel the preview to return to the form without creating the output directory.
 
+Graph generation uses reusable native WPF `DrawingContext` templates derived from the repository's `VisualLayer` approach. It does not require an external chart package.
+
+Visible-range and combined cursor/range plugins can select the `time-series` graph. It draws every configured ATLAS parameter as a separate colored trace and places live minimum, maximum, sample count, and optional cursor values in a side panel. Use `--graph time-series` from the CLI.
+
+Generated time graphs include a grid, automatic per-series scaling, a color legend through the statistics cards, minimum/maximum/average/sample-count statistics, and a cursor overlay for combined cursor/range plugins.
+
+Computed traces can combine the first two raw graph series using `difference`, `sum`, `average`, or safe `ratio` operations. Enter comma-separated `Name:operation` values in the GUI or repeat `--computed-series`, for example `--computed-series Delta:difference`.
+
+Graph modes also include `scatter` (first parameter on X, second on Y), `histogram` (distribution buckets for the first parameter), and `bar` (one average-value bar per series). Each mode uses the same visible-range request and statistics pipeline.
+
+Select `custom` when the standard renderers do not fit. The generator creates a separate `CustomGraphRenderer.cs` with a `DrawingContext`, graph extents, and all requested series ready for arbitrary native WPF drawing.
+
 Basic displays can choose a starter **View layout**: `text`, `form`, `list`, `table`, or `blank`. List and table layouts automatically generate the starter item collection required by their bindings. Use `--behavior basic --layout table` from the CLI.
 
 The basic `form` layout automatically creates a labeled WPF editor for every configured display property. Boolean properties use checkboxes; strings, integers, and numbers use text boxes with immediate binding updates.

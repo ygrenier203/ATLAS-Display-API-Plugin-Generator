@@ -40,6 +40,8 @@ def run(args=None):
 	parser.add_argument('--collection-name', default='Items', help='starter collection property name')
 	parser.add_argument('--item-class', default='ItemViewModel', help='starter collection item class name')
 	parser.add_argument('--item-field', action='append', default=[], help='item field as Name:type; repeat for multiple fields')
+	parser.add_argument('--graph', choices=('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'), default='none', help='graph renderer for visible-range data')
+	parser.add_argument('--computed-series', action='append', default=[], help='computed trace as Name:operation')
 	parser.add_argument('--clear-settings', action='store_true', help='clear persisted paths used by the generator and exit')
 	options = parser.parse_args(args)
 
@@ -53,6 +55,7 @@ def run(args=None):
 		build_dll_spec,
 		build_command_spec,
 		build_item_field_spec,
+		build_computed_series_spec,
 		clear_settings,
 		default_output_folder,
 		default_workspace_root,
@@ -95,6 +98,8 @@ def run(args=None):
 		parser.error('--item-collection requires --behavior basic.')
 	if options.layout != 'text' and behavior != BEHAVIOR_BASIC:
 		parser.error('--layout requires --behavior basic.')
+	if options.graph != 'none' and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
+		parser.error('--graph requires a visible-range behavior.')
 	if not icon_path:
 		parser.error('--icon is required on first use. Choose the PNG icon for the plugin.')
 	command_specs = []
@@ -108,6 +113,7 @@ def run(args=None):
 		command_names.add(command_spec['name'])
 	try:
 		item_field_specs = [build_item_field_spec(value) for value in options.item_field]
+		computed_series_specs = [build_computed_series_spec(value) for value in options.computed_series]
 	except ValueError as error:
 		parser.error(str(error))
 	dll_specs = []
@@ -135,6 +141,8 @@ def run(args=None):
 		collection_name=options.collection_name,
 		item_class_name=options.item_class,
 		item_field_specs=item_field_specs or None,
+		graph_type=options.graph,
+		computed_series_specs=computed_series_specs,
 		parameter_max_count=options.max_parameters,
 		workspace_root=default_workspace_root(),
 		library_project=library_project,

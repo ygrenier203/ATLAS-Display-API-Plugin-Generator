@@ -25,6 +25,8 @@ from tools.PluginGenerator.gui import (
     build_item_field_spec,
     build_item_members,
     build_generation_summary,
+    build_computed_series_spec,
+    build_computed_series_blocks,
     build_session_notification_hooks,
     build_display_property,
     build_display_property_field,
@@ -36,6 +38,8 @@ from tools.PluginGenerator.gui import (
     generate_plugin,
     load_preset,
     save_preset,
+    GRAPH_RENDERER_TEMPLATE,
+    GRAPH_SERIES_TEMPLATE,
 )
 from tools.PluginGenerator.generator import run
 
@@ -46,6 +50,28 @@ ICON = ROOT / 'icon.png'
 
 
 class ParameterAndPropertyTests(unittest.TestCase):
+    def test_graph_renderer_scaffold_uses_native_wpf_drawing(self):
+        renderer = GRAPH_RENDERER_TEMPLATE.format(namespace='DemoPlugin')
+        series = GRAPH_SERIES_TEMPLATE.format(namespace='DemoPlugin')
+
+        self.assertIn('DrawingContext drawingContext', renderer)
+        self.assertIn('drawingContext.DrawLine', renderer)
+        self.assertIn('double.IsNaN', renderer)
+        self.assertIn('IReadOnlyList<long> Timestamps', series)
+        self.assertIn('IReadOnlyList<double> Values', series)
+
+    def test_computed_series_supports_common_operations(self):
+        specs = [
+            build_computed_series_spec('Delta:difference'),
+            build_computed_series_spec('Mean:average'),
+            build_computed_series_spec('Ratio:ratio'),
+        ]
+        source = build_computed_series_blocks(specs)
+
+        self.assertIn('first.Values[index] - second.Values[index]', source)
+        self.assertIn('/ 2d', source)
+        self.assertIn('SafeRatio(', source)
+
     def test_deployed_plugin_discovery_excludes_built_in_plugins(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -624,6 +650,82 @@ class GenerationTests(unittest.TestCase):
 
         self.assertIn('ObservableCollection<ItemViewModel> Items', viewmodel)
         self.assertIn('DataGrid ItemsSource="{Binding Items}"', view)
+
+    def test_visible_range_plugin_can_generate_multi_series_time_graph(self):
+        target = self.generate(
+            behavior=BEHAVIOR_CURRENT_AND_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            atlas_parameters=['vCar:Chassis', 'rThrottlePedal:Chassis'],
+            graph_type='time-series',
+        )
+        project = target / 'SeparationPlugin'
+        view_path = project / 'SeparationPluginView.xaml'
+        view = view_path.read_text(encoding='utf-8')
+        codebehind = (project / 'SeparationPluginView.xaml.cs').read_text(encoding='utf-8')
+
+        self.assertTrue((project / 'GraphSeries.cs').exists())
+        self.assertTrue((project / 'GraphRenderer.cs').exists())
+        self.assertTrue((project / 'CustomGraphRenderer.cs').exists())
+        self.assertIn('VisualLayer x:Name="GraphVisualLayer"', view)
+        self.assertIn('ItemsSource="{Binding Series}"', view)
+        self.assertIn('new GraphSeries(', codebehind)
+        self.assertIn('item.Timestamps', codebehind)
+        self.assertIn('item.Values', codebehind)
+        self.assertIn('CursorVisualLayer', view)
+        self.assertIn('DrawCursor(', codebehind)
+        self.assertIn('Average:', view)
+        ET.parse(view_path)
+
+    def test_time_graph_requires_visible_range_behavior(self):
+        with self.assertRaisesRegex(ValueError, 'require a visible-range behavior'):
+            self.generate(include_parameters=False, graph_type='time-series')
+
+    def test_time_graph_can_generate_computed_series(self):
+        target = self.generate(
+            behavior=BEHAVIOR_VISIBLE_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            graph_type='time-series',
+            computed_series_specs=[build_computed_series_spec('Difference:difference')],
+        )
+        project = target / 'SeparationPlugin'
+        factory = (project / 'ComputedGraphSeriesFactory.cs').read_text(encoding='utf-8')
+        codebehind = (project / 'SeparationPluginView.xaml.cs').read_text(encoding='utf-8')
+
+        self.assertIn('"Difference"', factory)
+        self.assertIn('ComputedGraphSeriesFactory.Create', codebehind)
+
+    def test_graph_renderer_modes_generate_native_drawing_code(self):
+        expectations = {
+            'scatter': 'DrawScatter(',
+            'histogram': 'DrawHistogram(',
+            'bar': 'DrawBars(',
+        }
+        for graph_type, expected in expectations.items():
+            with self.subTest(graph_type=graph_type):
+                target = self.generate(
+                    behavior=BEHAVIOR_VISIBLE_RANGE,
+                    library_project=str(LIBRARY_PROJECT),
+                    graph_type=graph_type,
+                )
+                renderer = (
+                    target / 'SeparationPlugin' / 'GraphRenderer.cs'
+                ).read_text(encoding='utf-8')
+                self.assertIn(f'GraphType = "{graph_type}"', renderer)
+                self.assertIn(expected, renderer)
+
+    def test_custom_graph_generates_isolated_renderer_extension(self):
+        target = self.generate(
+            behavior=BEHAVIOR_VISIBLE_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            graph_type='custom',
+        )
+        project = target / 'SeparationPlugin'
+        custom = (project / 'CustomGraphRenderer.cs').read_text(encoding='utf-8')
+        renderer = (project / 'GraphRenderer.cs').read_text(encoding='utf-8')
+
+        self.assertIn('public sealed class CustomGraphRenderer', custom)
+        self.assertIn('TODO: Draw any custom visualization', custom)
+        self.assertIn('new CustomGraphRenderer().Draw', renderer)
 
     def test_collection_names_and_item_fields_are_configurable(self):
         target = self.generate(

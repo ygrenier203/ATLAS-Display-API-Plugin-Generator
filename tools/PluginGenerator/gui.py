@@ -181,7 +181,7 @@ def build_generation_summary(name, behavior, include_view, atlas_parameters, dis
                              command_specs, service_names, basic_layout='text', include_status_state=False,
                              include_lifecycle_hooks=False, include_session_notifications=False,
                              include_item_collection=False, collection_name='Items',
-                             item_class_name='ItemViewModel', item_field_specs=None, dll_specs=None):
+                             item_class_name='ItemViewModel', item_field_specs=None, graph_type='none', dll_specs=None):
     plugin_name = normalize_plugin_name(name)
     files = [
         f'{plugin_name}.sln',
@@ -221,6 +221,8 @@ def build_generation_summary(name, behavior, include_view, atlas_parameters, dis
     if uses_collection:
         fields = ', '.join(f'{spec["name"]}:{spec["type"]}' for spec in (item_field_specs or [])) or 'Name:string'
         features.append(f'collection {collection_name}<{item_class_name}> ({fields})')
+    if graph_type != 'none':
+        features.append(f'{graph_type} graph')
 
     lines = [
         f'Plugin: {plugin_name}',
@@ -573,6 +575,8 @@ namespace {namespace}
     {{
         private double maximum = double.NaN;
         private double minimum = double.NaN;
+        private double average = double.NaN;
+        private long? currentTimestamp;
 {current_value_field}
         private string name;
         private int sampleCount;
@@ -612,6 +616,19 @@ namespace {namespace}
             private set => this.SetProperty(ref this.maximum, value);
         }}
 
+        public double Average
+        {{
+            get => this.average;
+            private set => this.SetProperty(ref this.average, value);
+        }}
+
+        [Browsable(false)]
+        public long? CurrentTimestamp
+        {{
+            get => this.currentTimestamp;
+            private set => this.SetProperty(ref this.currentTimestamp, value);
+        }}
+
 {current_value_property}
 
         [Browsable(false)]
@@ -636,6 +653,7 @@ namespace {namespace}
             this.SampleCount = validValues.Length;
             this.Minimum = validValues.Length == 0 ? double.NaN : validValues.Min();
             this.Maximum = validValues.Length == 0 ? double.NaN : validValues.Max();
+            this.Average = validValues.Length == 0 ? double.NaN : validValues.Average();
         }}
 
 {current_value_update_method}
@@ -672,6 +690,7 @@ CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(S
             {
                 var parameterValues = signal.Data.ParameterValues;
                 double value;
+                long timestamp;
                 parameterValues.Lock();
                 try
                 {
@@ -681,6 +700,7 @@ CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(S
                     }
 
                     value = parameterValues.Data[0];
+                    timestamp = parameterValues.Timestamp[0];
                 }
                 finally
                 {
@@ -696,7 +716,7 @@ CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(S
                 {
                     var series = this.Series.FirstOrDefault(item =>
                         item.ParameterIdentifier == signal.Data.Request.RequestId);
-                    series?.UpdateCurrentValue(value);
+                    series?.UpdateCurrentValue(value, timestamp);
                 });
             }
             catch (Exception exception)
@@ -713,9 +733,10 @@ CURRENT_VALUE_PROPERTY = '''        public double CurrentValue
             private set => this.SetProperty(ref this.currentValue, value);
         }'''
 
-CURRENT_VALUE_UPDATE_METHOD = '''        public void UpdateCurrentValue(double value)
+CURRENT_VALUE_UPDATE_METHOD = '''        public void UpdateCurrentValue(double value, long timestamp)
         {
             this.CurrentValue = value;
+            this.CurrentTimestamp = timestamp;
         }'''
 
 CURRENT_VALUE_TEXT = '''                            <TextBlock Text="{Binding CurrentValue, StringFormat='Current: {0:F3}'}"
@@ -1014,6 +1035,261 @@ namespace {namespace}
 }}
 '''
 
+GRAPH_SERIES_TEMPLATE = '''using System.Collections.Generic;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public sealed class GraphSeries
+    {{
+        public GraphSeries(string name, IReadOnlyList<long> timestamps, IReadOnlyList<double> values, Color color)
+        {{
+            this.Name = name;
+            this.Timestamps = timestamps;
+            this.Values = values;
+            this.Color = color;
+        }}
+
+        public string Name {{ get; }}
+
+        public IReadOnlyList<long> Timestamps {{ get; }}
+
+        public IReadOnlyList<double> Values {{ get; }}
+
+        public Color Color {{ get; }}
+    }}
+}}
+'''
+
+GRAPH_RENDERER_TEMPLATE = '''using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public sealed class GraphRenderer
+    {{
+        private const string GraphType = "__GRAPH_TYPE__";
+
+        public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            drawingContext.DrawRectangle(Brushes.Transparent, new Pen(Brushes.DimGray, 1), new Rect(extents));
+            var gridPen = new Pen(Brushes.DimGray, 0.5);
+            for (var division = 1; division < 5; division++)
+            {{
+                var x = (extents.Width * division) / 5;
+                var y = (extents.Height * division) / 5;
+                drawingContext.DrawLine(gridPen, new Point(x, 0), new Point(x, extents.Height));
+                drawingContext.DrawLine(gridPen, new Point(0, y), new Point(extents.Width, y));
+            }}
+            if (extents.Width <= 0 || extents.Height <= 0)
+            {{
+                return;
+            }}
+
+            var validSeries = series.Where(item => item.Timestamps.Count > 1 && item.Values.Count > 1).ToList();
+            if (validSeries.Count == 0)
+            {{
+                return;
+            }}
+
+            if (GraphType == "scatter")
+            {{
+                this.DrawScatter(drawingContext, extents, validSeries);
+                return;
+            }}
+
+            if (GraphType == "histogram")
+            {{
+                this.DrawHistogram(drawingContext, extents, validSeries[0]);
+                return;
+            }}
+
+            if (GraphType == "bar")
+            {{
+                this.DrawBars(drawingContext, extents, validSeries);
+                return;
+            }}
+
+            if (GraphType == "custom")
+            {{
+                new CustomGraphRenderer().Draw(drawingContext, extents, validSeries);
+                return;
+            }}
+
+            var start = validSeries.Min(item => item.Timestamps.First());
+            var end = validSeries.Max(item => item.Timestamps.Last());
+            var timeRange = Math.Max(1, end - start);
+            foreach (var item in validSeries)
+            {{
+                this.DrawSeries(drawingContext, extents, item, start, timeRange);
+            }}
+        }}
+
+        public void DrawCursor(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series, long? timestamp)
+        {{
+            if (!timestamp.HasValue || series.Count == 0 || series[0].Timestamps.Count < 2)
+            {{
+                return;
+            }}
+
+            var start = series.Min(item => item.Timestamps.First());
+            var end = series.Max(item => item.Timestamps.Last());
+            if (timestamp.Value < start || timestamp.Value > end)
+            {{
+                return;
+            }}
+
+            var x = ((timestamp.Value - start) / (double)Math.Max(1, end - start)) * extents.Width;
+            drawingContext.DrawLine(new Pen(Brushes.White, 1), new Point(x, 0), new Point(x, extents.Height));
+        }}
+
+        private void DrawSeries(DrawingContext drawingContext, Size extents, GraphSeries series, long start, long timeRange)
+        {{
+            var count = Math.Min(series.Timestamps.Count, series.Values.Count);
+            var finiteValues = series.Values.Take(count).Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToList();
+            if (finiteValues.Count < 2)
+            {{
+                return;
+            }}
+
+            var minimum = finiteValues.Min();
+            var valueRange = Math.Max(double.Epsilon, finiteValues.Max() - minimum);
+            var pen = new Pen(new SolidColorBrush(series.Color), 1.5);
+            Point? previous = null;
+            for (var index = 0; index < count; index++)
+            {{
+                var value = series.Values[index];
+                if (double.IsNaN(value) || double.IsInfinity(value))
+                {{
+                    previous = null;
+                    continue;
+                }}
+
+                var x = ((series.Timestamps[index] - start) / (double)timeRange) * extents.Width;
+                var y = extents.Height - (((value - minimum) / valueRange) * extents.Height);
+                var point = new Point(x, y);
+                if (previous.HasValue)
+                {{
+                    drawingContext.DrawLine(pen, previous.Value, point);
+                }}
+
+                previous = point;
+            }}
+        }}
+
+        private void DrawScatter(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            if (series.Count < 2)
+            {{
+                return;
+            }}
+
+            var count = Math.Min(series[0].Values.Count, series[1].Values.Count);
+            var points = Enumerable.Range(0, count)
+                .Select(index => new {{ X = series[0].Values[index], Y = series[1].Values[index] }})
+                .Where(point => !double.IsNaN(point.X) && !double.IsNaN(point.Y)).ToList();
+            if (points.Count == 0) return;
+            var minX = points.Min(point => point.X);
+            var minY = points.Min(point => point.Y);
+            var rangeX = Math.Max(double.Epsilon, points.Max(point => point.X) - minX);
+            var rangeY = Math.Max(double.Epsilon, points.Max(point => point.Y) - minY);
+            foreach (var point in points)
+            {{
+                var x = ((point.X - minX) / rangeX) * extents.Width;
+                var y = extents.Height - (((point.Y - minY) / rangeY) * extents.Height);
+                drawingContext.DrawEllipse(Brushes.DeepSkyBlue, null, new Point(x, y), 2, 2);
+            }}
+        }}
+
+        private void DrawHistogram(DrawingContext drawingContext, Size extents, GraphSeries series)
+        {{
+            var values = series.Values.Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToList();
+            if (values.Count == 0) return;
+            const int bucketCount = 20;
+            var minimum = values.Min();
+            var range = Math.Max(double.Epsilon, values.Max() - minimum);
+            var buckets = new int[bucketCount];
+            foreach (var value in values)
+            {{
+                var bucket = Math.Min(bucketCount - 1, (int)(((value - minimum) / range) * bucketCount));
+                buckets[bucket]++;
+            }}
+
+            var maximumCount = Math.Max(1, buckets.Max());
+            var width = extents.Width / bucketCount;
+            for (var index = 0; index < bucketCount; index++)
+            {{
+                var height = (buckets[index] / (double)maximumCount) * extents.Height;
+                drawingContext.DrawRectangle(Brushes.DeepSkyBlue, null,
+                    new Rect(index * width, extents.Height - height, Math.Max(1, width - 1), height));
+            }}
+        }}
+
+        private void DrawBars(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            var averages = series.Select(item => item.Values.Where(value => !double.IsNaN(value)).DefaultIfEmpty().Average()).ToList();
+            var maximum = Math.Max(double.Epsilon, averages.Select(Math.Abs).DefaultIfEmpty(1).Max());
+            var width = extents.Width / Math.Max(1, averages.Count);
+            for (var index = 0; index < averages.Count; index++)
+            {{
+                var height = (Math.Abs(averages[index]) / maximum) * extents.Height;
+                drawingContext.DrawRectangle(new SolidColorBrush(series[index].Color), null,
+                    new Rect(index * width, extents.Height - height, Math.Max(1, width - 4), height));
+            }}
+        }}
+
+    }}
+}}
+'''
+
+CUSTOM_GRAPH_RENDERER_TEMPLATE = '''using System.Collections.Generic;
+using System.Windows;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public sealed class CustomGraphRenderer
+    {{
+        public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            // TODO: Draw any custom visualization using the supplied series and WPF DrawingContext.
+            // Example: drawingContext.DrawLine(new Pen(Brushes.DeepSkyBlue, 2), start, end);
+        }}
+    }}
+}}
+'''
+
+COMPUTED_GRAPH_SERIES_TEMPLATE = '''using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public static class ComputedGraphSeriesFactory
+    {{
+        public static IEnumerable<GraphSeries> Create(IReadOnlyList<GraphSeries> source)
+        {{
+            if (source.Count < 2)
+            {{
+                yield break;
+            }}
+
+            var first = source[0];
+            var second = source[1];
+            var count = Math.Min(first.Values.Count, second.Values.Count);
+{computed_blocks}
+        }}
+
+        private static double SafeRatio(double left, double right) =>
+            Math.Abs(right) < double.Epsilon ? double.NaN : left / right;
+    }}
+}}
+'''
+
 VIEW_XAML_HEADER = '''<UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -1099,6 +1375,46 @@ TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
             </ItemsControl>
         </DockPanel>
     </ScrollViewer>
+</UserControl>
+'''
+
+TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
+             xmlns:displayPluginLibrary="clr-namespace:DisplayPluginLibrary;assembly=DisplayPluginLibrary"
+             x:Class="{namespace}.{view_class}">
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+{command_buttons}        </StackPanel>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3*" />
+                <ColumnDefinition Width="240" />
+            </Grid.ColumnDefinitions>
+            <Border Margin="6" BorderBrush="DimGray" BorderThickness="1">
+                <Grid>
+                    <displayPluginLibrary:VisualLayer x:Name="GraphVisualLayer" />
+                    <displayPluginLibrary:VisualLayer x:Name="CursorVisualLayer" />
+                </Grid>
+            </Border>
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{{Binding Series}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="DimGray" BorderThickness="0,0,0,1" Padding="8">
+                                <StackPanel>
+                                    <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
+{current_value_text}
+                                    <TextBlock Text="{{Binding Minimum, StringFormat='Minimum: {{0:F3}}'}}" Foreground="White" />
+                                    <TextBlock Text="{{Binding Maximum, StringFormat='Maximum: {{0:F3}}'}}" Foreground="White" />
+                                    <TextBlock Text="{{Binding Average, StringFormat='Average: {{0:F3}}'}}" Foreground="White" />
+                                    <TextBlock Text="{{Binding SampleCount, StringFormat='Samples: {{0}}'}}" Foreground="White" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
 </UserControl>
 '''
 
@@ -1866,6 +2182,112 @@ def build_status_state():
 '''
     return fields, properties
 
+GRAPH_VIEW_CODEBEHIND_TEMPLATE = '''using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.ComponentModel;
+using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public partial class {view_class} : UserControl
+    {{
+        private static readonly Color[] Palette =
+        {{
+            Colors.DeepSkyBlue, Colors.Orange, Colors.LimeGreen, Colors.Magenta,
+            Colors.Gold, Colors.Cyan, Colors.Red, Colors.MediumPurple,
+        }};
+        private readonly GraphRenderer graphRenderer = new GraphRenderer();
+        private {viewmodel_class} viewModel;
+
+        public {view_class}()
+        {{
+            this.InitializeComponent();
+            this.DataContextChanged += this.OnDataContextChanged;
+            this.SizeChanged += (sender, args) => this.Redraw();
+        }}
+
+        private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs args)
+        {{
+            this.Detach();
+            this.viewModel = args.NewValue as {viewmodel_class};
+            if (this.viewModel != null)
+            {{
+                this.viewModel.Series.CollectionChanged += this.OnSeriesCollectionChanged;
+                this.AttachSeries();
+            }}
+
+            this.Redraw();
+        }}
+
+        private void OnSeriesCollectionChanged(object sender, NotifyCollectionChangedEventArgs args)
+        {{
+            this.AttachSeries();
+            this.Redraw();
+        }}
+
+        private void AttachSeries()
+        {{
+            if (this.viewModel == null)
+            {{
+                return;
+            }}
+
+            foreach (var item in this.viewModel.Series)
+            {{
+                item.PropertyChanged -= this.OnSeriesPropertyChanged;
+                item.PropertyChanged += this.OnSeriesPropertyChanged;
+            }}
+        }}
+
+        private void OnSeriesPropertyChanged(object sender, PropertyChangedEventArgs args)
+        {{
+            if (args.PropertyName == nameof(TimebaseSeriesViewModel.Values) ||
+                args.PropertyName == nameof(TimebaseSeriesViewModel.Timestamps) ||
+                args.PropertyName == nameof(TimebaseSeriesViewModel.CurrentTimestamp))
+            {{
+                this.Redraw();
+            }}
+        }}
+
+        private void Detach()
+        {{
+            if (this.viewModel == null)
+            {{
+                return;
+            }}
+
+            this.viewModel.Series.CollectionChanged -= this.OnSeriesCollectionChanged;
+            foreach (var item in this.viewModel.Series)
+            {{
+                item.PropertyChanged -= this.OnSeriesPropertyChanged;
+            }}
+        }}
+
+        private void Redraw()
+        {{
+            var visual = this.GraphVisualLayer.Visual;
+            var series = this.viewModel?.Series.Select((item, index) => new GraphSeries(
+                item.Name,
+                item.Timestamps,
+                item.Values,
+                Palette[index % Palette.Length])).ToList() ?? new List<GraphSeries>();
+{computed_series_update}
+            visual.Draw(context => this.graphRenderer.Draw(context, visual.Extents, series));
+            var cursorVisual = this.CursorVisualLayer.Visual;
+            var cursorTimestamp = this.viewModel?.Series.Select(item => item.CurrentTimestamp).FirstOrDefault(value => value.HasValue);
+            cursorVisual.Draw(context => this.graphRenderer.DrawCursor(
+                context,
+                cursorVisual.Extents,
+                series,
+                cursorTimestamp));
+        }}
+    }}
+}}
+'''
+
 
 def build_item_field_spec(value):
     parts = [part.strip() for part in str(value or '').split(':', 1)]
@@ -1876,6 +2298,34 @@ def build_item_field_spec(value):
     if property_type not in DISPLAY_PROPERTY_TYPES.values():
         raise ValueError(f'Unsupported item field type: {property_type}')
     return {'name': name, 'type': property_type}
+
+
+def build_computed_series_spec(value):
+    parts = [part.strip() for part in str(value or '').split(':', 1)]
+    if len(parts) != 2 or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_ ]*', parts[0]):
+        raise ValueError('Computed series must use Name:operation.')
+    operation = parts[1].lower()
+    if operation not in ('difference', 'sum', 'average', 'ratio'):
+        raise ValueError(f'Unsupported computed series operation: {operation}')
+    return {'name': parts[0], 'operation': operation}
+
+
+def build_computed_series_blocks(specs):
+    expressions = {
+        'difference': 'first.Values[index] - second.Values[index]',
+        'sum': 'first.Values[index] + second.Values[index]',
+        'average': '(first.Values[index] + second.Values[index]) / 2d',
+        'ratio': 'SafeRatio(first.Values[index], second.Values[index])',
+    }
+    blocks = []
+    for spec in specs:
+        name = escape_csharp_string(spec['name'])
+        expression = expressions[spec['operation']]
+        blocks.append(
+            f'            yield return new GraphSeries("{name}", first.Timestamps.Take(count).ToArray(),\n'
+            f'                Enumerable.Range(0, count).Select(index => {expression}).ToArray(), Colors.White);'
+        )
+    return '\n'.join(blocks)
 
 
 def build_item_members(field_specs):
@@ -1964,7 +2414,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     include_status_state=False, include_lifecycle_hooks=False,
                     include_session_notifications=False, include_item_collection=False,
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
-                    item_field_specs=None, dll_specs=None, atlas_install_directory=None):
+                    item_field_specs=None, graph_type='none', computed_series_specs=None, dll_specs=None, atlas_install_directory=None):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -1979,6 +2429,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     atlas_parameters = validated_atlas_parameters
     display_property_specs = list(display_property_specs or [])
     command_specs = list(command_specs or [])
+    computed_series_specs = list(computed_series_specs or [])
     dll_specs = normalize_dll_specs(dll_specs)
     validate_display_property_actions(display_property_specs, behavior)
     validate_command_actions(command_specs, display_property_specs)
@@ -1990,6 +2441,12 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError(f'Unknown basic view layout: {basic_layout}')
     if behavior != BEHAVIOR_BASIC and basic_layout != 'text':
         raise ValueError('View layout selection is only available for basic displays.')
+    if graph_type not in ('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'):
+        raise ValueError(f'Unknown graph type: {graph_type}')
+    if graph_type != 'none' and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
+        raise ValueError('Time-series graphs require a visible-range behavior.')
+    if computed_series_specs and graph_type == 'none':
+        raise ValueError('Computed series require a graph.')
     if include_item_collection and basic_layout == 'text':
         basic_layout = 'list'
     include_item_collection = include_item_collection or basic_layout in ('list', 'table')
@@ -2084,7 +2541,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         view_template = VIEW_XAML_TEMPLATE
     elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         viewmodel_template = TIMEBASE_VIEWMODEL_TEMPLATE
-        view_template = TIMEBASE_VIEW_XAML_TEMPLATE
+        view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if graph_type != 'none' else TIMEBASE_VIEW_XAML_TEMPLATE
     elif behavior == BEHAVIOR_COMPARE_SESSIONS:
         viewmodel_template = COMPARE_VIEWMODEL_TEMPLATE
         view_template = COMPARE_VIEW_XAML_TEMPLATE
@@ -2207,6 +2664,17 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             current_value_property=CURRENT_VALUE_PROPERTY if include_current_value else '',
             current_value_update_method=CURRENT_VALUE_UPDATE_METHOD if include_current_value else '',
         )
+        if graph_type != 'none':
+            files['GraphSeries.cs'] = GRAPH_SERIES_TEMPLATE.format(namespace=namespace)
+            files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace).replace(
+                '__GRAPH_TYPE__', graph_type
+            )
+            files['CustomGraphRenderer.cs'] = CUSTOM_GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
+            if computed_series_specs:
+                files['ComputedGraphSeriesFactory.cs'] = COMPUTED_GRAPH_SERIES_TEMPLATE.format(
+                    namespace=namespace,
+                    computed_blocks=build_computed_series_blocks(computed_series_specs),
+                )
     elif behavior == BEHAVIOR_COMPARE_SESSIONS:
         files['CompareRowViewModel.cs'] = COMPARE_ROW_VIEWMODEL_TEMPLATE.format(namespace=namespace)
         files['CompareSessionValueViewModel.cs'] = COMPARE_SESSION_VALUE_VIEWMODEL_TEMPLATE.format(
@@ -2233,9 +2701,15 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 item_field_specs[0]['name'],
             ),
         )
-        files[f'{name}View.xaml.cs'] = VIEW_CODEBEHIND_TEMPLATE.format(
+        codebehind_template = GRAPH_VIEW_CODEBEHIND_TEMPLATE if graph_type != 'none' else VIEW_CODEBEHIND_TEMPLATE
+        files[f'{name}View.xaml.cs'] = codebehind_template.format(
             namespace=namespace,
             view_class=f'{name}View',
+            viewmodel_class=f'{name}ViewModel',
+            computed_series_update=(
+                '            series.AddRange(ComputedGraphSeriesFactory.Create(series).ToList());'
+                if computed_series_specs else ''
+            ),
         )
 
     for filename, content in files.items():
@@ -2595,6 +3069,21 @@ class PluginGeneratorApp(tk.Tk):
         self.item_fields_entry = tk.Entry(advanced_frame, textvariable=self.item_fields_var, width=36)
         self.item_fields_entry.grid(row=9, column=1, sticky='ew', padx=8)
 
+        tk.Label(advanced_frame, text='Graph:').grid(row=10, column=0, sticky='w', pady=4)
+        self.graph_type_var = tk.StringVar(value='none')
+        self.graph_type_combo = ttk.Combobox(
+            advanced_frame,
+            textvariable=self.graph_type_var,
+            values=('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'),
+            state='disabled',
+            width=22,
+        )
+        self.graph_type_combo.grid(row=10, column=1, sticky='w', padx=8)
+        tk.Label(advanced_frame, text='Computed series (Name:operation):').grid(row=11, column=0, sticky='w', pady=4)
+        self.computed_series_var = tk.StringVar(value='')
+        self.computed_series_entry = tk.Entry(advanced_frame, textvariable=self.computed_series_var, width=36)
+        self.computed_series_entry.grid(row=11, column=1, sticky='ew', padx=8)
+        
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
         button_frame.pack(fill=tk.X, pady=12)
@@ -3181,6 +3670,8 @@ class PluginGeneratorApp(tk.Tk):
         self.collection_name_var.set('Items')
         self.item_class_name_var.set('ItemViewModel')
         self.item_fields_var.set('Name:string')
+        self.graph_type_var.set('none')
+        self.computed_series_var.set('')
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
@@ -3208,6 +3699,11 @@ class PluginGeneratorApp(tk.Tk):
         for widget_name in ('collection_name_entry', 'item_class_name_entry', 'item_fields_entry'):
             if hasattr(self, widget_name):
                 getattr(self, widget_name).config(state=tk.NORMAL if not parameters_enabled else tk.DISABLED)
+        if hasattr(self, 'graph_type_combo'):
+            graph_enabled = self.behavior_var.get() in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE)
+            self.graph_type_combo.config(state='readonly' if graph_enabled else 'disabled')
+            if not graph_enabled:
+                self.graph_type_var.set('none')
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output, library, icon, and ATLAS paths?'):
@@ -3237,6 +3733,8 @@ class PluginGeneratorApp(tk.Tk):
             'collection_name': self.collection_name_var.get(),
             'item_class_name': self.item_class_name_var.get(),
             'item_fields': self.item_fields_var.get(),
+            'graph_type': self.graph_type_var.get(),
+            'computed_series': self.computed_series_var.get(),
         }
 
     def apply_preset_configuration(self, configuration):
@@ -3263,6 +3761,8 @@ class PluginGeneratorApp(tk.Tk):
         self.collection_name_var.set(configuration.get('collection_name', 'Items'))
         self.item_class_name_var.set(configuration.get('item_class_name', 'ItemViewModel'))
         self.item_fields_var.set(configuration.get('item_fields', 'Name:string'))
+        self.graph_type_var.set(configuration.get('graph_type', 'none'))
+        self.computed_series_var.set(configuration.get('computed_series', ''))
         self.update_behavior_states()
 
     def save_preset_dialog(self):
@@ -3318,6 +3818,11 @@ class PluginGeneratorApp(tk.Tk):
                 for value in self.item_fields_var.get().split(',')
                 if value.strip()
             ]
+            computed_series_specs = [
+                build_computed_series_spec(value)
+                for value in self.computed_series_var.get().split(',')
+                if value.strip()
+            ]
             if atlas_parameters and not include_parameters:
                 raise ValueError('ATLAS parameters require Current value or Visible range behavior.')
             service_names = [name for name, var in self.service_vars.items() if var.get()]
@@ -3337,6 +3842,7 @@ class PluginGeneratorApp(tk.Tk):
                 collection_name=self.collection_name_var.get().strip(),
                 item_class_name=self.item_class_name_var.get().strip(),
                 item_field_specs=item_field_specs,
+                graph_type=self.graph_type_var.get(),
                 dll_specs=self.dll_specs,
             )
             if not messagebox.askokcancel('Generation Preview', summary):
@@ -3359,6 +3865,8 @@ class PluginGeneratorApp(tk.Tk):
                 collection_name=self.collection_name_var.get().strip(),
                 item_class_name=self.item_class_name_var.get().strip(),
                 item_field_specs=item_field_specs,
+                graph_type=self.graph_type_var.get(),
+                computed_series_specs=computed_series_specs,
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,
