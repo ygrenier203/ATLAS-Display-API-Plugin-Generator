@@ -2294,7 +2294,8 @@ class PluginGeneratorApp(tk.Tk):
 
         tk.Label(output_frame, text='Plugin icon (.png):').grid(row=2, column=0, sticky='w', pady=6)
         self.icon_var = tk.StringVar(value=settings.get('icon_path', ''))
-        tk.Entry(output_frame, textvariable=self.icon_var, width=45).grid(row=2, column=1, sticky='ew', padx=8)
+        self.icon_entry = tk.Entry(output_frame, textvariable=self.icon_var, width=45)
+        self.icon_entry.grid(row=2, column=1, sticky='ew', padx=8)
         tk.Button(output_frame, text='Browse', command=self.browse_icon).grid(row=2, column=2, padx=6)
         tk.Button(output_frame, text='Create...', command=self.create_icon).grid(row=2, column=3, padx=6)
 
@@ -2626,7 +2627,7 @@ class PluginGeneratorApp(tk.Tk):
         )
         if path:
             self.clear_generated_icon_temp_directory()
-            self.icon_var.set(path)
+            self.set_icon_path(path)
 
     def browse_atlas_install(self):
         initial = self.atlas_install_var.get().strip()
@@ -2818,9 +2819,15 @@ class PluginGeneratorApp(tk.Tk):
         )
         if path:
             self.generated_icon_temp_directory = temporary_directory
-            self.icon_var.set(path)
+            self.set_icon_path(path)
         else:
             shutil.rmtree(temporary_directory, ignore_errors=True)
+
+    def set_icon_path(self, path):
+        self.icon_var.set(os.path.abspath(path))
+        self.icon_entry.icursor(tk.END)
+        self.icon_entry.xview_moveto(1.0)
+        self.update_idletasks()
 
     def clear_generated_icon_temp_directory(self):
         if self.generated_icon_temp_directory:
@@ -3316,7 +3323,7 @@ class PluginGeneratorApp(tk.Tk):
                 os.path.basename(icon_path),
             )
             self.clear_generated_icon_temp_directory()
-            self.icon_var.set(copied_icon_path)
+            self.set_icon_path(copied_icon_path)
             save_settings({
                 'output_folder': base_out,
                 'library_project': library_project,
