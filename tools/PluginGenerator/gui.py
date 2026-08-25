@@ -2372,7 +2372,7 @@ class PluginGeneratorApp(tk.Tk):
         self.open_folder_var = tk.BooleanVar(value=True)
         tk.Checkbutton(advanced_frame, text='Open folder after generation', variable=self.open_folder_var).grid(row=1, column=0, columnspan=2, sticky='w', pady=4)
 
-        self.build_after_generation_var = tk.BooleanVar(value=True)
+        self.build_after_generation_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
             advanced_frame,
             text='Build and validate after generation',
