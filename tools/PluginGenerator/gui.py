@@ -1028,6 +1028,7 @@ VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
+        </DockPanel>
     </ScrollViewer>
 </UserControl>
 '''

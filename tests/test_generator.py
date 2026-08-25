@@ -309,6 +309,24 @@ class GenerationTests(unittest.TestCase):
             contents[cli_directory + 4:cli_directory + 8] = (72).to_bytes(4, 'little')
         path.write_bytes(contents)
 
+    def test_every_behavior_generates_well_formed_xaml(self):
+        for behavior in (
+            BEHAVIOR_BASIC,
+            BEHAVIOR_CURRENT_VALUE,
+            BEHAVIOR_VISIBLE_RANGE,
+            BEHAVIOR_CURRENT_AND_RANGE,
+            BEHAVIOR_COMPARE_SESSIONS,
+        ):
+            with self.subTest(behavior=behavior):
+                options = {'behavior': behavior}
+                if behavior != BEHAVIOR_BASIC:
+                    options.update(
+                        library_project=str(LIBRARY_PROJECT),
+                        atlas_parameters=['vCar:Chassis'],
+                    )
+                target = self.generate(**options)
+                ET.parse(target / 'SeparationPlugin' / 'SeparationPluginView.xaml')
+
     def test_dll_dependencies_are_classified_copied_and_referenced(self):
         with tempfile.TemporaryDirectory() as dependency_directory:
             managed_path = Path(dependency_directory) / 'ManagedExtension.dll'
