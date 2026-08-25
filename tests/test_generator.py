@@ -28,6 +28,9 @@ from tools.PluginGenerator.gui import (
     build_display_property,
     build_display_property_field,
     build_display_property_spec,
+    build_dll_spec,
+    list_deployed_plugins,
+    plugin_cleanup_files,
     generate_plugin,
     load_preset,
     save_preset,
@@ -41,6 +44,42 @@ ICON = ROOT / 'icon.png'
 
 
 class ParameterAndPropertyTests(unittest.TestCase):
+    def test_deployed_plugin_discovery_excludes_built_in_plugins(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            custom = root / 'CustomDLLs'
+            custom.mkdir()
+            (root / 'MyDisplayPlugin.dll').write_bytes(b'')
+            (root / 'MAT.Atlas.Plugins.NumericDisplay.dll').write_bytes(b'')
+            (custom / 'AnotherPlugin.dll').write_bytes(b'')
+            (custom / 'System.Reactive.dll').write_bytes(b'')
+
+            plugins = list_deployed_plugins(str(root))
+
+            self.assertEqual(
+                [str(custom / 'AnotherPlugin.dll'), str(root / 'MyDisplayPlugin.dll')],
+                plugins,
+            )
+
+    def test_plugin_cleanup_files_limits_sidecars_to_selected_plugin(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plugin = Path(directory) / 'MyPlugin.dll'
+            files = [
+                plugin,
+                Path(directory) / 'MyPlugin.pdb',
+                Path(directory) / 'MyPlugin.deps.json',
+                Path(directory) / 'System.Reactive.dll',
+            ]
+            for path in files:
+                path.write_bytes(b'')
+
+            cleanup = plugin_cleanup_files(str(plugin))
+
+            self.assertIn(str(plugin), cleanup)
+            self.assertIn(str(Path(directory) / 'MyPlugin.pdb'), cleanup)
+            self.assertIn(str(Path(directory) / 'MyPlugin.deps.json'), cleanup)
+            self.assertNotIn(str(Path(directory) / 'System.Reactive.dll'), cleanup)
+
     def test_generation_summary_lists_features_and_files(self):
         summary = build_generation_summary(
             'Demo',
@@ -256,6 +295,76 @@ class GenerationTests(unittest.TestCase):
             icon_path=str(ICON),
             **options,
         ))
+
+    @staticmethod
+    def create_test_dll(path, managed):
+        contents = bytearray(512)
+        contents[0:2] = b'MZ'
+        contents[0x3C:0x40] = (0x80).to_bytes(4, 'little')
+        contents[0x80:0x84] = b'PE\0\0'
+        contents[0x98:0x9A] = (0x20B).to_bytes(2, 'little')
+        if managed:
+            cli_directory = 0x80 + 24 + 112 + (14 * 8)
+            contents[cli_directory:cli_directory + 4] = (0x2000).to_bytes(4, 'little')
+            contents[cli_directory + 4:cli_directory + 8] = (72).to_bytes(4, 'little')
+        path.write_bytes(contents)
+
+    def test_dll_dependencies_are_classified_copied_and_referenced(self):
+        with tempfile.TemporaryDirectory() as dependency_directory:
+            managed_path = Path(dependency_directory) / 'ManagedExtension.dll'
+            native_path = Path(dependency_directory) / 'NativeExtension.dll'
+            self.create_test_dll(managed_path, True)
+            self.create_test_dll(native_path, False)
+            dll_specs = [
+                build_dll_spec(managed_path, 'custom'),
+                build_dll_spec(native_path, 'atlas'),
+            ]
+
+            target = self.generate(include_parameters=False, dll_specs=dll_specs)
+            project_directory = target / 'SeparationPlugin'
+            project = (project_directory / 'SeparationPlugin.csproj').read_text(encoding='utf-8')
+            deploy_script = (target / 'scripts' / 'deploy.py').read_text(encoding='utf-8')
+
+            self.assertTrue((project_directory / 'Dependencies' / 'Managed' / managed_path.name).is_file())
+            self.assertFalse((project_directory / 'Dependencies' / 'Native' / native_path.name).exists())
+            self.assertIn('<Reference Include="ManagedExtension">', project)
+            self.assertIn(r'<HintPath>Dependencies\Managed\ManagedExtension.dll</HintPath>', project)
+            self.assertIn('$(TargetDir)ManagedExtension.dll', project)
+            self.assertNotIn('$(TargetDir)NativeExtension.dll', project)
+            self.assertIn("parser.add_argument('dll_paths', nargs='+')", deploy_script)
+
+    def test_custom_native_dll_is_copied_and_deployed(self):
+        with tempfile.TemporaryDirectory() as dependency_directory:
+            native_path = Path(dependency_directory) / 'NativeExtension.dll'
+            self.create_test_dll(native_path, False)
+
+            target = self.generate(
+                include_parameters=False,
+                dll_specs=[build_dll_spec(native_path, 'custom')],
+            )
+            project_directory = target / 'SeparationPlugin'
+            project = (project_directory / 'SeparationPlugin.csproj').read_text(encoding='utf-8')
+
+            self.assertTrue((project_directory / 'Dependencies' / 'Native' / native_path.name).is_file())
+            self.assertIn(r'<Content Include="Dependencies\Native\NativeExtension.dll">', project)
+            self.assertIn('<TargetPath>NativeExtension.dll</TargetPath>', project)
+            self.assertIn('$(TargetDir)NativeExtension.dll', project)
+
+    def test_dll_dependencies_reject_duplicate_filenames(self):
+        with tempfile.TemporaryDirectory() as first_directory, tempfile.TemporaryDirectory() as second_directory:
+            first_path = Path(first_directory) / 'Duplicate.dll'
+            second_path = Path(second_directory) / 'duplicate.dll'
+            self.create_test_dll(first_path, False)
+            self.create_test_dll(second_path, False)
+
+            with self.assertRaisesRegex(ValueError, 'already selected'):
+                self.generate(
+                    include_parameters=False,
+                    dll_specs=[
+                        {'path': str(first_path), 'source': 'custom'},
+                        {'path': str(second_path), 'source': 'atlas'},
+                    ],
+                )
 
     @patch('tools.PluginGenerator.gui.save_settings')
     @patch('tools.PluginGenerator.gui.generate_plugin')

@@ -8,6 +8,8 @@ def run(args=None):
 	parser.add_argument('--output', help='parent folder for the generated plugin; required until configured')
 	parser.add_argument('--library-project', help='path to DisplayPluginLibrary.csproj; required for data plugins until configured')
 	parser.add_argument('--icon', help='path to the plugin PNG icon; required until configured')
+	parser.add_argument('--dll', action='append', default=[], help='managed or native DLL dependency; repeat as needed')
+	parser.add_argument('--atlas-install', help='ATLAS installation directory used for debugging and deployment')
 	parser.add_argument('--no-view', action='store_true', help='omit the WPF view files')
 	parser.add_argument(
 		'--behavior',
@@ -48,6 +50,7 @@ def run(args=None):
 		BEHAVIOR_CURRENT_VALUE,
 		BEHAVIOR_VISIBLE_RANGE,
 		build_generated_plugin,
+		build_dll_spec,
 		build_command_spec,
 		build_item_field_spec,
 		clear_settings,
@@ -81,6 +84,7 @@ def run(args=None):
 	output = options.output or settings.get('output_folder') or default_output_folder()
 	library_project = options.library_project or settings.get('library_project', '')
 	icon_path = options.icon or settings.get('icon_path', '')
+	atlas_install_directory = options.atlas_install or settings.get('atlas_install_directory', '')
 	if not output:
 		parser.error('--output is required on first use. Choose the parent folder for the generated plugin.')
 	if include_parameters and not library_project:
@@ -106,6 +110,15 @@ def run(args=None):
 		item_field_specs = [build_item_field_spec(value) for value in options.item_field]
 	except ValueError as error:
 		parser.error(str(error))
+	dll_specs = []
+	dll_names = set()
+	for dll_path in options.dll:
+		try:
+			dll_spec = build_dll_spec(dll_path, 'custom', dll_names)
+		except ValueError as error:
+			parser.error(str(error))
+		dll_specs.append(dll_spec)
+		dll_names.add(dll_spec['name'])
 	target = generate_plugin(
 		options.name,
 		output,
@@ -126,11 +139,14 @@ def run(args=None):
 		workspace_root=default_workspace_root(),
 		library_project=library_project,
 		icon_path=icon_path,
+		dll_specs=dll_specs,
+		atlas_install_directory=atlas_install_directory or None,
 	)
 	save_settings({
 		'output_folder': output,
 		'library_project': library_project,
 		'icon_path': icon_path,
+		'atlas_install_directory': atlas_install_directory,
 	})
 	if options.build:
 		build_generated_plugin(target)
