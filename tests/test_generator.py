@@ -32,6 +32,7 @@ from tools.PluginGenerator.gui import (
     build_dll_spec,
     list_deployed_plugins,
     plugin_cleanup_files,
+    remove_dll_specs,
     generate_plugin,
     load_preset,
     save_preset,
@@ -80,6 +81,17 @@ class ParameterAndPropertyTests(unittest.TestCase):
             self.assertIn(str(Path(directory) / 'MyPlugin.pdb'), cleanup)
             self.assertIn(str(Path(directory) / 'MyPlugin.deps.json'), cleanup)
             self.assertNotIn(str(Path(directory) / 'System.Reactive.dll'), cleanup)
+
+    def test_dll_specs_are_removed_by_path_not_tree_index(self):
+        specs = [
+            {'name': 'First.dll', 'path': r'C:\deps\First.dll'},
+            {'name': 'Second.dll', 'path': r'C:\deps\Second.dll'},
+            {'name': 'Third.dll', 'path': r'C:\deps\Third.dll'},
+        ]
+
+        remaining = remove_dll_specs(specs, [r'c:\DEPS\Second.dll'])
+
+        self.assertEqual(['First.dll', 'Third.dll'], [spec['name'] for spec in remaining])
 
     def test_generation_summary_lists_features_and_files(self):
         summary = build_generation_summary(

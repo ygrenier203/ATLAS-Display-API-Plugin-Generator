@@ -36,13 +36,17 @@ def load_preset(path):
 
 def list_deployed_plugins(atlas_install_directory):
     candidates = []
-    roots = [atlas_install_directory, os.path.join(atlas_install_directory, 'CustomDLLs')]
+    custom_root = os.path.join(atlas_install_directory, 'CustomDLLs')
+    roots = [atlas_install_directory, custom_root]
     for root in roots:
         if not os.path.isdir(root):
             continue
         for filename in os.listdir(root):
             lowered = filename.lower()
-            if not lowered.endswith('customplugin.dll') or lowered.startswith('mat.atlas.plugins.'):
+            is_plugin = lowered.endswith('plugin.dll') or os.path.normcase(root) == os.path.normcase(custom_root)
+            if not lowered.endswith('.dll') or not is_plugin or lowered.startswith('mat.atlas.plugins.'):
+                continue
+            if lowered.startswith(('system.', 'microsoft.', 'newtonsoft.', 'autofac.')):
                 continue
             path = os.path.join(root, filename)
             if os.path.isfile(path):
@@ -67,6 +71,14 @@ def remove_deployed_plugin_files(plugin_paths):
     for plugin_path in plugin_paths:
         for path in plugin_cleanup_files(plugin_path):
             os.remove(path)
+
+
+def remove_dll_specs(dll_specs, selected_paths):
+    selected = {os.path.normcase(os.path.abspath(path)) for path in selected_paths}
+    return [
+        spec for spec in dll_specs
+        if os.path.normcase(os.path.abspath(spec['path'])) not in selected
+    ]
 
 
 def request_elevated_plugin_removal(plugin_paths):
@@ -2623,7 +2635,15 @@ class PluginGeneratorApp(tk.Tk):
         except RuntimeError as error:
             messagebox.showerror('Remove Deployed Plugins', str(error))
             return
-        self.after(1000, self.refresh_deployed_plugins)
+        self._refresh_after_deployed_removal(plugin_paths)
+
+    def _refresh_after_deployed_removal(self, plugin_paths, attempts_remaining=30):
+        self.refresh_deployed_plugins()
+        if attempts_remaining > 0 and any(os.path.exists(path) for path in plugin_paths):
+            self.after(
+                500,
+                lambda: self._refresh_after_deployed_removal(plugin_paths, attempts_remaining - 1),
+            )
 
     def refresh_dll_tree(self):
         self.dll_tree.delete(*self.dll_tree.get_children())
@@ -2663,9 +2683,8 @@ class PluginGeneratorApp(tk.Tk):
         if not selections:
             messagebox.showinfo('DLL Manager', 'Select one or more DLLs to remove.')
             return
-        indexes = sorted((self.dll_tree.index(item) for item in selections), reverse=True)
-        for index in indexes:
-            del self.dll_specs[index]
+        selected_paths = [self.dll_tree.item(item, 'values')[3] for item in selections]
+        self.dll_specs = remove_dll_specs(self.dll_specs, selected_paths)
         self.refresh_dll_tree()
 
     def add_atlas_dlls(self):
