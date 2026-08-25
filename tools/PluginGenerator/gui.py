@@ -1720,7 +1720,8 @@ def command_display_label(name):
     return re.sub(r'(?<!^)(?=[A-Z])', ' ', name)
 
 
-def build_command_spec(name, button_label='', include_button=True, existing_names=None, generate_can_execute=False):
+def build_command_spec(name, button_label='', include_button=True, existing_names=None, generate_can_execute=False,
+                       generate_log=False, break_when_attached=False):
     name = (name or '').strip()
     if name.endswith('Command'):
         name = name[:-len('Command')]
@@ -1733,6 +1734,8 @@ def build_command_spec(name, button_label='', include_button=True, existing_name
         'button_label': (button_label or '').strip() or command_display_label(name),
         'include_button': bool(include_button),
         'generate_can_execute': bool(generate_can_execute),
+        'generate_log': bool(generate_log),
+        'break_when_attached': bool(break_when_attached),
     }
 
 
@@ -1751,10 +1754,21 @@ def build_command_initializer(spec):
     )
 
 
-def build_command_handler(spec):
+def build_command_handler(spec, logger_expression='this.Logger'):
+    instrumentation = ''
+    if spec.get('generate_log', False):
+        instrumentation += f'            {logger_expression}.Trace("Command {spec["name"]} executed.");\n'
+    if spec.get('break_when_attached', False):
+        instrumentation += (
+            '            if (Debugger.IsAttached)\n'
+            '            {\n'
+            '                Debugger.Break();\n'
+            '            }\n'
+        )
     handler = (
         f'        private void On{spec["name"]}()\n'
         '        {\n'
+        f'{instrumentation}'
         f'            // TODO: Implement {spec["name"]}.\n'
         '        }\n'
     )
@@ -2051,6 +2065,9 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
 
     # ISignalBus/IDataRequestSignalFactory are always injected by ParameterSampleDisplayViewModelBase.
     requested_services = list(service_names or [])
+    if behavior == BEHAVIOR_BASIC and any(spec.get('generate_log', False) for spec in command_specs):
+        if 'ILogger' not in requested_services:
+            requested_services.append('ILogger')
     if include_parameters:
         extra_service_names = [
             n for n in requested_services
@@ -2066,12 +2083,15 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         extra_usings += 'using System.Collections.ObjectModel;\n'
     if include_synchronization_context:
         extra_usings += 'using System.Threading;\n'
+    if any(spec.get('break_when_attached', False) for spec in command_specs):
+        extra_usings += 'using System.Diagnostics;\n'
     extra_ctor_params = ''
     extra_ctor_assignments = ''
     service_members = ''
     command_properties = '\n'.join(build_command_property(spec) for spec in command_specs)
     command_initializers = ''.join(build_command_initializer(spec) for spec in command_specs)
-    command_handlers = '\n'.join(build_command_handler(spec) for spec in command_specs)
+    logger_expression = 'this.Logger' if include_parameters else 'this.logger'
+    command_handlers = '\n'.join(build_command_handler(spec, logger_expression) for spec in command_specs)
     command_buttons = ''.join(build_command_button(spec) for spec in command_specs)
     status_state_fields, status_state_properties = build_status_state() if include_status_state else ('', '')
     threading_fields = build_threading_fields(include_synchronization_context, include_object_lock)
@@ -2445,7 +2465,7 @@ class PluginGeneratorApp(tk.Tk):
         self.command_specs = []
         self.command_tree = ttk.Treeview(
             command_frame,
-            columns=('name', 'button_label', 'include_button', 'can_execute'),
+            columns=('name', 'button_label', 'include_button', 'can_execute', 'log', 'breakpoint'),
             show='headings',
             height=4,
         )
@@ -2453,10 +2473,14 @@ class PluginGeneratorApp(tk.Tk):
         self.command_tree.heading('button_label', text='Button Label')
         self.command_tree.heading('include_button', text='Add Button')
         self.command_tree.heading('can_execute', text='Enabled Rule')
+        self.command_tree.heading('log', text='Log')
+        self.command_tree.heading('breakpoint', text='Debug Break')
         self.command_tree.column('name', width=150, anchor='w')
         self.command_tree.column('button_label', width=180, anchor='w')
         self.command_tree.column('include_button', width=80, anchor='w')
         self.command_tree.column('can_execute', width=100, anchor='w')
+        self.command_tree.column('log', width=55, anchor='w')
+        self.command_tree.column('breakpoint', width=85, anchor='w')
         self.command_tree.pack(fill=tk.BOTH, expand=True, pady=4)
         self.command_tree.bind('<Double-1>', lambda event: self.edit_selected_command())
 
@@ -2943,6 +2967,8 @@ class PluginGeneratorApp(tk.Tk):
                 spec['button_label'],
                 'Yes' if spec['include_button'] else 'No',
                 'Generated' if spec.get('generate_can_execute', False) else 'Always',
+                'Yes' if spec.get('generate_log', False) else 'No',
+                'Yes' if spec.get('break_when_attached', False) else 'No',
             ))
 
     def add_command_dialog(self):
@@ -2984,6 +3010,8 @@ class PluginGeneratorApp(tk.Tk):
         button_label_var = tk.StringVar(value=initial.get('button_label', ''))
         include_button_var = tk.BooleanVar(value=initial.get('include_button', True))
         can_execute_var = tk.BooleanVar(value=initial.get('generate_can_execute', False))
+        generate_log_var = tk.BooleanVar(value=initial.get('generate_log', False))
+        breakpoint_var = tk.BooleanVar(value=initial.get('break_when_attached', False))
 
         tk.Label(dialog, text='Action Name (required):').grid(row=0, column=0, sticky='w', padx=8, pady=6)
         tk.Entry(dialog, textvariable=name_var, width=35).grid(row=0, column=1, sticky='ew', padx=8, pady=6)
@@ -2997,6 +3025,16 @@ class PluginGeneratorApp(tk.Tk):
             text='Generate an enabled/disabled rule (CanExecute)',
             variable=can_execute_var,
         ).grid(row=3, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        tk.Checkbutton(
+            dialog,
+            text='Log when the command runs (injects ILogger when needed)',
+            variable=generate_log_var,
+        ).grid(row=4, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        tk.Checkbutton(
+            dialog,
+            text='Break into the debugger when one is attached',
+            variable=breakpoint_var,
+        ).grid(row=5, column=0, columnspan=2, sticky='w', padx=8, pady=6)
         dialog.columnconfigure(1, weight=1)
 
         result = {}
@@ -3010,6 +3048,8 @@ class PluginGeneratorApp(tk.Tk):
                     include_button_var.get(),
                     existing_names,
                     can_execute_var.get(),
+                    generate_log_var.get(),
+                    breakpoint_var.get(),
                 )
             except ValueError as error:
                 messagebox.showerror('Invalid Command', str(error), parent=dialog)
@@ -3017,7 +3057,7 @@ class PluginGeneratorApp(tk.Tk):
             dialog.destroy()
 
         button_frame = tk.Frame(dialog)
-        button_frame.grid(row=4, column=0, columnspan=2, pady=10)
+        button_frame.grid(row=6, column=0, columnspan=2, pady=10)
         tk.Button(button_frame, text='OK', command=on_ok, width=10).pack(side=tk.LEFT, padx=4)
         tk.Button(button_frame, text='Cancel', command=dialog.destroy, width=10).pack(side=tk.LEFT, padx=4)
         dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)

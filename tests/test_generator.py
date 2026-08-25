@@ -266,6 +266,14 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertEqual('ExportData', spec['name'])
         self.assertEqual('Export Data', spec['button_label'])
 
+    def test_command_can_generate_logging_and_attached_debugger_break(self):
+        spec = build_command_spec('Recalculate', generate_log=True, break_when_attached=True)
+        source = build_command_handler(spec, 'this.logger')
+
+        self.assertIn('this.logger.Trace("Command Recalculate executed.");', source)
+        self.assertIn('if (Debugger.IsAttached)', source)
+        self.assertIn('Debugger.Break();', source)
+
     def test_command_button_escapes_xaml_text(self):
         spec = build_command_spec('Export', 'Save & Close')
 
@@ -407,6 +415,22 @@ class GenerationTests(unittest.TestCase):
         ).read_text(encoding='utf-8')
 
         self.assertEqual(1, viewmodel.count('ILogger logger'))
+
+    def test_instrumented_basic_command_automatically_injects_logger(self):
+        target = self.generate(
+            include_parameters=False,
+            command_specs=[build_command_spec(
+                'Recalculate', generate_log=True, break_when_attached=True
+            )],
+        )
+        viewmodel = (
+            target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('using System.Diagnostics;', viewmodel)
+        self.assertIn('private readonly ILogger logger;', viewmodel)
+        self.assertIn('this.logger.Trace("Command Recalculate executed.");', viewmodel)
+        self.assertIn('Debugger.Break();', viewmodel)
 
     def test_dll_dependencies_are_classified_copied_and_referenced(self):
         with tempfile.TemporaryDirectory() as dependency_directory:
