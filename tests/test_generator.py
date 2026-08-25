@@ -167,7 +167,10 @@ class ParameterAndPropertyTests(unittest.TestCase):
         cases = [
             ('Title', 'string', 'Ready', 'private string _title = "Ready";'),
             ('Count', 'int', '12', 'private int _count = 12;'),
+            ('Total', 'long', '12000000000', 'private long _total = 12000000000L;'),
             ('Scale', 'double', '1.5', 'private double _scale = 1.5d;'),
+            ('Ratio', 'float', '1.25', 'private float _ratio = 1.25f;'),
+            ('Price', 'decimal', '19.95', 'private decimal _price = 19.95m;'),
             ('Enabled', 'bool', 'true', 'private bool _enabled = true;'),
         ]
         for name, property_type, default_value, expected in cases:
@@ -179,6 +182,35 @@ class ParameterAndPropertyTests(unittest.TestCase):
                 )
                 self.assertIn(expected, build_display_property_field(spec))
                 self.assertIn(f'public {property_type} {name}', build_display_property(spec))
+
+    def test_list_property_defaults_generate_typed_collections(self):
+        cases = [
+            ('Labels', 'List<string>', '["Front", "Rear"]', 'new List<string> { "Front", "Rear" }'),
+            ('Counts', 'List<int>', '[1, 2]', 'new List<int> { 1, 2 }'),
+            ('Values', 'List<double>', '[1.5, 2]', 'new List<double> { 1.5d, 2d }'),
+            ('Flags', 'List<bool>', '[true, false]', 'new List<bool> { true, false }'),
+        ]
+        for name, property_type, default_value, expected in cases:
+            with self.subTest(property_type=property_type):
+                spec = build_display_property_spec(
+                    name, property_type=property_type, default_value=default_value
+                )
+                self.assertIn(expected, build_display_property_field(spec))
+
+    def test_read_only_property_has_no_setter(self):
+        spec = build_display_property_spec(
+            'ComputedValue', property_type='double', default_value='0', read_only=True
+        )
+        source = build_display_property(spec)
+
+        self.assertIn('public double ComputedValue', source)
+        self.assertIn('get => this._computedValue;', source)
+        self.assertNotIn('set', source)
+        self.assertIn('Text="{Binding ComputedValue}"', build_property_control(spec))
+
+    def test_read_only_property_rejects_change_action(self):
+        with self.assertRaisesRegex(ValueError, 'read-only'):
+            build_display_property_spec('ComputedValue', read_only=True, change_action='refresh-all')
 
     def test_invalid_typed_defaults_are_rejected(self):
         invalid_defaults = [

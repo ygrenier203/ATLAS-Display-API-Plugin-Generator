@@ -3,6 +3,7 @@ import re
 import json
 import math
 import html
+from decimal import Decimal, InvalidOperation
 import ctypes
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -346,6 +347,7 @@ namespace {namespace}
 
 VIEWMODEL_TEMPLATE = '''using DisplayPluginLibrary;
 
+using System.Collections.Generic;
 using MAT.Atlas.Api.Core.Diagnostics;
 using MAT.Atlas.Api.Core.Signals;
 using MAT.Atlas.Client.Platform.Data;
@@ -381,7 +383,8 @@ namespace {namespace}
 }}
 '''
 
-BASIC_VIEWMODEL_TEMPLATE = '''using System.ComponentModel;
+BASIC_VIEWMODEL_TEMPLATE = '''using System.Collections.Generic;
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Windows.Input;
 
@@ -406,6 +409,7 @@ namespace {namespace}
 '''
 
 TIMEBASE_VIEWMODEL_TEMPLATE = '''using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
@@ -1105,7 +1109,9 @@ BASIC_LAYOUTS = ('text', 'form', 'list', 'table', 'blank')
 def build_property_control(spec):
     label = html.escape(spec.get('display_name') or command_display_label(spec['name']), quote=True)
     name = spec['name']
-    if spec['type'] == 'bool':
+    if spec.get('read_only', False):
+        editor = f'<TextBlock Text="{{Binding {name}}}" Foreground="White" />'
+    elif spec['type'] == 'bool':
         editor = f'<CheckBox IsChecked="{{Binding {name}}}" VerticalAlignment="Center" />'
     else:
         editor = (
@@ -1293,8 +1299,15 @@ def build_atlas_parameter(identifier, existing_identifiers=None):
 DISPLAY_PROPERTY_TYPES = {
     'String': 'string',
     'Integer': 'int',
+    'Long integer': 'long',
     'Number': 'double',
+    'Single-precision number': 'float',
+    'Decimal': 'decimal',
     'Boolean': 'bool',
+    'String list': 'List<string>',
+    'Integer list': 'List<int>',
+    'Number list': 'List<double>',
+    'Boolean list': 'List<bool>',
 }
 
 DISPLAY_PROPERTY_ACTIONS = {
@@ -1309,14 +1322,14 @@ def parse_display_property_default(property_type, default_value):
     text = str(default_value or '').strip()
     if property_type == 'string':
         return text
-    if property_type == 'int':
+    if property_type in ('int', 'long'):
         if not text:
             return 0
         try:
             return int(text)
         except ValueError as error:
             raise ValueError('Integer property default must be a whole number.') from error
-    if property_type == 'double':
+    if property_type in ('double', 'float'):
         if not text:
             return 0.0
         try:
@@ -1326,6 +1339,16 @@ def parse_display_property_default(property_type, default_value):
         if not math.isfinite(value):
             raise ValueError('Number property default must be finite.')
         return value
+    if property_type == 'decimal':
+        if not text:
+            return '0'
+        try:
+            value = Decimal(text)
+        except InvalidOperation as error:
+            raise ValueError('Decimal property default must be numeric.') from error
+        if not value.is_finite():
+            raise ValueError('Decimal property default must be finite.')
+        return str(value)
     if property_type == 'bool':
         if not text:
             return False
@@ -1335,12 +1358,34 @@ def parse_display_property_default(property_type, default_value):
         if normalized in ('false', 'no', '0'):
             return False
         raise ValueError('Boolean property default must be true or false.')
+    if property_type.startswith('List<'):
+        if not text:
+            return []
+        try:
+            values = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise ValueError('List defaults must be a JSON array, for example [1, 2, 3].') from error
+        if not isinstance(values, list):
+            raise ValueError('List defaults must be a JSON array, for example [1, 2, 3].')
+        item_type = property_type[5:-1]
+        if item_type == 'string' and not all(isinstance(value, str) for value in values):
+            raise ValueError('String list defaults may only contain strings.')
+        if item_type == 'int' and not all(isinstance(value, int) and not isinstance(value, bool) for value in values):
+            raise ValueError('Integer list defaults may only contain whole numbers.')
+        if item_type == 'double' and not all(
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+            for value in values
+        ):
+            raise ValueError('Number list defaults may only contain finite numbers.')
+        if item_type == 'bool' and not all(isinstance(value, bool) for value in values):
+            raise ValueError('Boolean list defaults may only contain true or false.')
+        return values
     raise ValueError(f'Unsupported display property type: {property_type}')
 
 
 def build_display_property_spec(name, display_name='', category='', description='', order='', persisted=False,
                                 browsable=True, property_type='string', default_value='', change_action='none',
-                                existing_names=None):
+                                read_only=False, existing_names=None):
     name = (name or '').strip()
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
         raise ValueError(f'Display property name "{name}" must be a valid C# identifier.')
@@ -1353,6 +1398,8 @@ def build_display_property_spec(name, display_name='', category='', description=
         raise ValueError(f'Unsupported display property type: {property_type}')
     if change_action not in DISPLAY_PROPERTY_ACTIONS.values():
         raise ValueError(f'Unsupported display property change action: {change_action}')
+    if read_only and change_action != 'none':
+        raise ValueError('A read-only display property cannot run a change action.')
     parsed_default = parse_display_property_default(property_type, default_value)
     order_text = str(order).strip()
     if not order_text:
@@ -1372,6 +1419,7 @@ def build_display_property_spec(name, display_name='', category='', description=
         'type': property_type,
         'default': parsed_default,
         'change_action': change_action,
+        'read_only': bool(read_only),
     }
 
 
@@ -1390,10 +1438,20 @@ def display_property_default_literal(spec):
         return f'"{escape_csharp_string(value)}"'
     if spec['type'] == 'int':
         return str(value)
+    if spec['type'] == 'long':
+        return f'{value}L'
     if spec['type'] == 'double':
         return f'{format(value, ".15g")}d'
+    if spec['type'] == 'float':
+        return f'{format(value, ".8g")}f'
+    if spec['type'] == 'decimal':
+        return f'{value}m'
     if spec['type'] == 'bool':
         return 'true' if value else 'false'
+    if spec['type'].startswith('List<'):
+        item_type = spec['type'][5:-1]
+        literals = [display_property_default_literal({'type': item_type, 'default': item}) for item in value]
+        return f'new {spec["type"]} {{ {", ".join(literals)} }}'
     raise ValueError(f'Unsupported display property type: {spec["type"]}')
 
 
@@ -1407,7 +1465,13 @@ def build_display_property(spec):
         'refresh-all': '                    this.MakeDataRequests(true, true);\n',
     }
     action_statement = action_statements[spec.get('change_action', 'none')]
-    if spec['persisted'] or action_statement:
+    if spec.get('read_only', False):
+        accessor = (
+            f'            get => this.{field} = this.ReadProperty({default_value});\n'
+            if spec['persisted'] else
+            f'            get => this.{field};\n'
+        )
+    elif spec['persisted'] or action_statement:
         save_statement = '                    this.SaveProperty(value);\n' if spec['persisted'] else ''
         accessor = (
             f'            get => this.{field} = this.ReadProperty({default_value});\n'
@@ -2297,7 +2361,7 @@ class PluginGeneratorApp(tk.Tk):
 
         self.display_property_specs = []
 
-        tree_columns = ('identifier', 'type', 'default', 'action', 'display_name', 'persisted', 'browsable')
+        tree_columns = ('identifier', 'type', 'default', 'action', 'display_name', 'persisted', 'read_only', 'browsable')
         column_headings = {
             'identifier': 'Identifier',
             'type': 'Type',
@@ -2305,6 +2369,7 @@ class PluginGeneratorApp(tk.Tk):
             'action': 'When Changed',
             'display_name': 'Display Name',
             'persisted': 'Persisted',
+            'read_only': 'Read Only',
             'browsable': 'Browsable',
         }
         column_widths = {
@@ -2314,6 +2379,7 @@ class PluginGeneratorApp(tk.Tk):
             'action': 130,
             'display_name': 120,
             'persisted': 65,
+            'read_only': 65,
             'browsable': 65,
         }
         self.property_tree = ttk.Treeview(property_frame, columns=tree_columns, show='headings', height=6)
@@ -2681,6 +2747,7 @@ class PluginGeneratorApp(tk.Tk):
                 ),
                 spec['display_name'],
                 'Yes' if spec['persisted'] else 'No',
+                'Yes' if spec.get('read_only', False) else 'No',
                 'Yes' if spec['browsable'] else 'No',
             ))
 
@@ -2735,6 +2802,7 @@ class PluginGeneratorApp(tk.Tk):
         description_var = tk.StringVar(value=initial.get('description', ''))
         order_var = tk.StringVar(value='' if initial.get('order') is None else str(initial['order']))
         persisted_var = tk.BooleanVar(value=initial.get('persisted', False))
+        read_only_var = tk.BooleanVar(value=initial.get('read_only', False))
         browsable_var = tk.BooleanVar(value=initial.get('browsable', True))
 
         fields = [
@@ -2764,8 +2832,10 @@ class PluginGeneratorApp(tk.Tk):
                 )
         tk.Checkbutton(dialog, text='Persist to workbook', variable=persisted_var).grid(
             row=len(fields), column=0, columnspan=2, sticky='w', padx=8, pady=6)
-        tk.Checkbutton(dialog, text='Visible in properties window (Browsable)', variable=browsable_var).grid(
+        tk.Checkbutton(dialog, text='Read-only (generated without a setter)', variable=read_only_var).grid(
             row=len(fields) + 1, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        tk.Checkbutton(dialog, text='Visible in properties window (Browsable)', variable=browsable_var).grid(
+            row=len(fields) + 2, column=0, columnspan=2, sticky='w', padx=8, pady=6)
         dialog.columnconfigure(1, weight=1)
 
         result = {}
@@ -2786,6 +2856,7 @@ class PluginGeneratorApp(tk.Tk):
                     DISPLAY_PROPERTY_TYPES[type_var.get()],
                     default_var.get(),
                     DISPLAY_PROPERTY_ACTIONS[action_var.get()],
+                    read_only_var.get(),
                     existing_names=existing_names,
                 )
             except ValueError as error:
@@ -2797,7 +2868,7 @@ class PluginGeneratorApp(tk.Tk):
             dialog.destroy()
 
         button_frame = tk.Frame(dialog)
-        button_frame.grid(row=len(fields) + 2, column=0, columnspan=2, pady=10)
+        button_frame.grid(row=len(fields) + 3, column=0, columnspan=2, pady=10)
         tk.Button(button_frame, text='OK', command=on_ok, width=10).pack(side=tk.LEFT, padx=4)
         tk.Button(button_frame, text='Cancel', command=on_cancel, width=10).pack(side=tk.LEFT, padx=4)
 
