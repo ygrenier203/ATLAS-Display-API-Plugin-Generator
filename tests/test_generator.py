@@ -23,6 +23,7 @@ from tools.PluginGenerator.gui import (
     build_property_control,
     build_item_field_spec,
     build_item_members,
+    build_threading_fields,
     build_generation_summary,
     build_session_notification_hooks,
     build_display_property,
@@ -212,6 +213,12 @@ class ParameterAndPropertyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'read-only'):
             build_display_property_spec('ComputedValue', read_only=True, change_action='refresh-all')
 
+    def test_threading_scaffolds_are_optional(self):
+        source = build_threading_fields(True, True)
+
+        self.assertIn('SynchronizationContext.Current', source)
+        self.assertIn('private readonly object _syncLock = new object();', source)
+
     def test_invalid_typed_defaults_are_rejected(self):
         invalid_defaults = [
             ('int', '1.5'),
@@ -358,6 +365,36 @@ class GenerationTests(unittest.TestCase):
                     )
                 target = self.generate(**options)
                 ET.parse(target / 'SeparationPlugin' / 'SeparationPluginView.xaml')
+
+    def test_basic_plugin_can_inject_logger_and_generate_threading_fields(self):
+        target = self.generate(
+            include_parameters=False,
+            service_names=['ILogger'],
+            include_synchronization_context=True,
+            include_object_lock=True,
+        )
+        viewmodel = (
+            target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('using MAT.Atlas.Api.Core.Diagnostics;', viewmodel)
+        self.assertIn('ILogger logger', viewmodel)
+        self.assertIn('private readonly ILogger logger;', viewmodel)
+        self.assertIn('using System.Threading;', viewmodel)
+        self.assertIn('SynchronizationContext.Current', viewmodel)
+        self.assertIn('private readonly object _syncLock = new object();', viewmodel)
+
+    def test_data_plugin_does_not_duplicate_builtin_logger_injection(self):
+        target = self.generate(
+            behavior=BEHAVIOR_CURRENT_VALUE,
+            library_project=str(LIBRARY_PROJECT),
+            service_names=['ILogger'],
+        )
+        viewmodel = (
+            target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs'
+        ).read_text(encoding='utf-8')
+
+        self.assertEqual(1, viewmodel.count('ILogger logger'))
 
     def test_dll_dependencies_are_classified_copied_and_referenced(self):
         with tempfile.TemporaryDirectory() as dependency_directory:

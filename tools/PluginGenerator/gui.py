@@ -168,7 +168,8 @@ def build_generation_summary(name, behavior, include_view, atlas_parameters, dis
                              command_specs, service_names, basic_layout='text', include_status_state=False,
                              include_lifecycle_hooks=False, include_session_notifications=False,
                              include_item_collection=False, collection_name='Items',
-                             item_class_name='ItemViewModel', item_field_specs=None, dll_specs=None):
+                             item_class_name='ItemViewModel', item_field_specs=None, dll_specs=None,
+                             include_synchronization_context=False, include_object_lock=False):
     plugin_name = normalize_plugin_name(name)
     files = [
         f'{plugin_name}.sln',
@@ -205,6 +206,10 @@ def build_generation_summary(name, behavior, include_view, atlas_parameters, dis
         features.append('lifecycle hooks')
     if include_session_notifications:
         features.append('session notification hooks')
+    if include_synchronization_context:
+        features.append('captured UI synchronization context')
+    if include_object_lock:
+        features.append('private synchronization lock')
     if uses_collection:
         fields = ', '.join(f'{spec["name"]}:{spec["type"]}' for spec in (item_field_specs or [])) or 'Name:string'
         features.append(f'collection {collection_name}<{item_class_name}> ({fields})')
@@ -1516,6 +1521,7 @@ def build_display_property(spec):
 # Factories/services registered with Autofac, injectable via the ViewModel constructor.
 # Namespaces/param names verified against Atlas.DisplayAPI.Examples usage.
 SERVICE_DEFINITIONS = {
+    'ILogger': {'namespace': 'MAT.Atlas.Api.Core.Diagnostics', 'param': 'logger'},
     'ISignalBus': {'namespace': 'MAT.Atlas.Api.Core.Signals', 'param': 'signalBus'},
     'IDataRequestSignalFactory': {'namespace': 'MAT.Atlas.Client.Platform.Data', 'param': 'dataRequestSignalFactory'},
     'ISessionService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionService'},
@@ -1576,6 +1582,18 @@ def build_service_usings(entries):
 
 def build_service_fields(entries):
     return ''.join(f'        private readonly {entry["interface"]} {entry["param"]};\n' for entry in entries)
+
+
+def build_threading_fields(include_synchronization_context=False, include_object_lock=False):
+    fields = []
+    if include_synchronization_context:
+        fields.append(
+            '        private readonly SynchronizationContext _synchronizationContext = '
+            'SynchronizationContext.Current;'
+        )
+    if include_object_lock:
+        fields.append('        private readonly object _syncLock = new object();')
+    return '\n'.join(fields) + ('\n' if fields else '')
 
 
 def build_basic_service_members(viewmodel_class, entries, command_initializers=''):
@@ -1877,7 +1895,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     include_status_state=False, include_lifecycle_hooks=False,
                     include_session_notifications=False, include_item_collection=False,
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
-                    item_field_specs=None, dll_specs=None, atlas_install_directory=None):
+                    item_field_specs=None, dll_specs=None, atlas_install_directory=None,
+                    include_synchronization_context=False, include_object_lock=False):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -2021,7 +2040,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     # ISignalBus/IDataRequestSignalFactory are always injected by ParameterSampleDisplayViewModelBase.
     requested_services = list(service_names or [])
     if include_parameters:
-        extra_service_names = [n for n in requested_services if n not in ('ISignalBus', 'IDataRequestSignalFactory')]
+        extra_service_names = [
+            n for n in requested_services
+            if n not in ('ILogger', 'ISignalBus', 'IDataRequestSignalFactory')
+        ]
     else:
         extra_service_names = requested_services
     service_entries = build_service_entries(extra_service_names)
@@ -2030,6 +2052,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         extra_usings += 'using MAT.Atlas.Client.Platform.Sessions;\n'
     if include_item_collection:
         extra_usings += 'using System.Collections.ObjectModel;\n'
+    if include_synchronization_context:
+        extra_usings += 'using System.Threading;\n'
     extra_ctor_params = ''
     extra_ctor_assignments = ''
     service_members = ''
@@ -2038,6 +2062,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     command_handlers = '\n'.join(build_command_handler(spec) for spec in command_specs)
     command_buttons = ''.join(build_command_button(spec) for spec in command_specs)
     status_state_fields, status_state_properties = build_status_state() if include_status_state else ('', '')
+    threading_fields = build_threading_fields(include_synchronization_context, include_object_lock)
+    display_property_fields = '\n'.join(filter(None, [threading_fields.rstrip(), display_property_fields]))
     session_notification_hooks = build_session_notification_hooks() if include_session_notifications else ''
     item_collection_property = (
         '        [Browsable(false)]\n'
@@ -2487,6 +2513,20 @@ class PluginGeneratorApp(tk.Tk):
         self.item_fields_var = tk.StringVar(value='Name:string')
         self.item_fields_entry = tk.Entry(advanced_frame, textvariable=self.item_fields_var, width=36)
         self.item_fields_entry.grid(row=9, column=1, sticky='ew', padx=8)
+
+        self.synchronization_context_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            advanced_frame,
+            text='Capture the current SynchronizationContext',
+            variable=self.synchronization_context_var,
+        ).grid(row=10, column=0, columnspan=2, sticky='w', pady=4)
+
+        self.object_lock_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            advanced_frame,
+            text='Generate a private object lock',
+            variable=self.object_lock_var,
+        ).grid(row=11, column=0, columnspan=2, sticky='w', pady=4)
         
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
@@ -2992,12 +3032,14 @@ class PluginGeneratorApp(tk.Tk):
         self.collection_name_var.set('Items')
         self.item_class_name_var.set('ItemViewModel')
         self.item_fields_var.set('Name:string')
+        self.synchronization_context_var.set(False)
+        self.object_lock_var.set(False)
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
         # Data behaviors inject these services through DisplayPluginLibrary base classes.
         parameters_enabled = behavior_uses_parameters(self.behavior_var.get())
-        for service_name in ('ISignalBus', 'IDataRequestSignalFactory'):
+        for service_name in ('ILogger', 'ISignalBus', 'IDataRequestSignalFactory'):
             checkbutton = self.service_checkbuttons[service_name]
             if parameters_enabled:
                 self.service_vars[service_name].set(True)
@@ -3049,6 +3091,8 @@ class PluginGeneratorApp(tk.Tk):
             'collection_name': self.collection_name_var.get(),
             'item_class_name': self.item_class_name_var.get(),
             'item_fields': self.item_fields_var.get(),
+            'include_synchronization_context': self.synchronization_context_var.get(),
+            'include_object_lock': self.object_lock_var.get(),
         }
 
     def apply_preset_configuration(self, configuration):
@@ -3076,6 +3120,8 @@ class PluginGeneratorApp(tk.Tk):
         self.collection_name_var.set(configuration.get('collection_name', 'Items'))
         self.item_class_name_var.set(configuration.get('item_class_name', 'ItemViewModel'))
         self.item_fields_var.set(configuration.get('item_fields', 'Name:string'))
+        self.synchronization_context_var.set(configuration.get('include_synchronization_context', False))
+        self.object_lock_var.set(configuration.get('include_object_lock', False))
         self.update_behavior_states()
 
     def save_preset_dialog(self):
@@ -3151,6 +3197,8 @@ class PluginGeneratorApp(tk.Tk):
                 item_class_name=self.item_class_name_var.get().strip(),
                 item_field_specs=item_field_specs,
                 dll_specs=self.dll_specs,
+                include_synchronization_context=self.synchronization_context_var.get(),
+                include_object_lock=self.object_lock_var.get(),
             )
             if not messagebox.askokcancel('Generation Preview', summary):
                 return
@@ -3180,6 +3228,8 @@ class PluginGeneratorApp(tk.Tk):
                 service_names=service_names,
                 dll_specs=self.dll_specs,
                 atlas_install_directory=self.atlas_install_var.get().strip(),
+                include_synchronization_context=self.synchronization_context_var.get(),
+                include_object_lock=self.object_lock_var.get(),
             )
             save_settings({
                 'output_folder': base_out,
