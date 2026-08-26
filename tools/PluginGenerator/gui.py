@@ -813,7 +813,7 @@ namespace {namespace}
         {{
             try
             {{
-                var updates = new List<(CompositeSessionKey SessionKey, double Value)>();
+                var updates = new List<(MAT.OCS.Core.CompositeSessionKey SessionKey, double Value)>();
                 foreach (var result in signal.Data.Results)
                 {{
                     var parameterValues = result.Value.ParameterValues;
@@ -932,7 +932,7 @@ namespace {namespace}
             }}
         }}
 
-        public void Update(CompositeSessionKey sessionKey, double value)
+        public void Update(MAT.OCS.Core.CompositeSessionKey sessionKey, double value)
         {{
             var sessionValue = this.SessionValues.FirstOrDefault(item => item.SessionKey == sessionKey);
             if (sessionValue != null)
@@ -956,14 +956,14 @@ namespace {namespace}
         private string sessionName;
         private double value = double.NaN;
 
-        public CompareSessionValueViewModel(CompositeSessionKey sessionKey, string sessionName)
+        public CompareSessionValueViewModel(MAT.OCS.Core.CompositeSessionKey sessionKey, string sessionName)
         {{
             this.SessionKey = sessionKey;
             this.sessionName = sessionName;
         }}
 
         [Browsable(false)]
-        public CompositeSessionKey SessionKey {{ get; }}
+        public MAT.OCS.Core.CompositeSessionKey SessionKey {{ get; }}
 
         public string SessionName
         {{

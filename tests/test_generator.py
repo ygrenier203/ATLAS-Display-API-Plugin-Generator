@@ -862,7 +862,9 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('parameterValues.Unlock()', viewmodel)
         self.assertIn('ExecuteOnUiAsync', viewmodel)
         self.assertIn('ObservableCollection<CompareSessionValueViewModel>', row)
-        self.assertIn('CompositeSessionKey SessionKey', value)
+        self.assertIn('MAT.OCS.Core.CompositeSessionKey SessionKey', value)
+        self.assertIn('List<(MAT.OCS.Core.CompositeSessionKey SessionKey, double Value)>', viewmodel)
+        self.assertNotIn('List<(CompositeSessionKey SessionKey', viewmodel)
         self.assertIn('ItemsSource="{Binding Rows}"', view)
         self.assertIn('ItemsSource="{Binding SessionValues}"', view)
 
