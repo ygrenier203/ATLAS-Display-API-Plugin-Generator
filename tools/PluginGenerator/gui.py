@@ -3,12 +3,14 @@ import re
 import json
 import math
 import html
+from decimal import Decimal, InvalidOperation
 import ctypes
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import shutil
 import subprocess
 import sys
+import tempfile
 import uuid
 
 PRESET_VERSION = 1
@@ -35,13 +37,17 @@ def load_preset(path):
 
 def list_deployed_plugins(atlas_install_directory):
     candidates = []
-    roots = [atlas_install_directory, os.path.join(atlas_install_directory, 'CustomDLLs')]
+    custom_root = os.path.join(atlas_install_directory, 'CustomDLLs')
+    roots = [atlas_install_directory, custom_root]
     for root in roots:
         if not os.path.isdir(root):
             continue
         for filename in os.listdir(root):
             lowered = filename.lower()
-            if not lowered.endswith('customplugin.dll') or lowered.startswith('mat.atlas.plugins.'):
+            is_plugin = lowered.endswith('plugin.dll') or os.path.normcase(root) == os.path.normcase(custom_root)
+            if not lowered.endswith('.dll') or not is_plugin or lowered.startswith('mat.atlas.plugins.'):
+                continue
+            if lowered.startswith(('system.', 'microsoft.', 'newtonsoft.', 'autofac.')):
                 continue
             path = os.path.join(root, filename)
             if os.path.isfile(path):
@@ -66,6 +72,14 @@ def remove_deployed_plugin_files(plugin_paths):
     for plugin_path in plugin_paths:
         for path in plugin_cleanup_files(plugin_path):
             os.remove(path)
+
+
+def remove_dll_specs(dll_specs, selected_paths):
+    selected = {os.path.normcase(os.path.abspath(path)) for path in selected_paths}
+    return [
+        spec for spec in dll_specs
+        if os.path.normcase(os.path.abspath(spec['path'])) not in selected
+    ]
 
 
 def request_elevated_plugin_removal(plugin_paths):
@@ -167,7 +181,7 @@ def build_generation_summary(name, behavior, include_view, atlas_parameters, dis
                              command_specs, service_names, basic_layout='text', include_status_state=False,
                              include_lifecycle_hooks=False, include_session_notifications=False,
                              include_item_collection=False, collection_name='Items',
-                             item_class_name='ItemViewModel', item_field_specs=None, dll_specs=None):
+                             item_class_name='ItemViewModel', item_field_specs=None, graph_type='none', dll_specs=None):
     plugin_name = normalize_plugin_name(name)
     files = [
         f'{plugin_name}.sln',
@@ -207,6 +221,8 @@ def build_generation_summary(name, behavior, include_view, atlas_parameters, dis
     if uses_collection:
         fields = ', '.join(f'{spec["name"]}:{spec["type"]}' for spec in (item_field_specs or [])) or 'Name:string'
         features.append(f'collection {collection_name}<{item_class_name}> ({fields})')
+    if graph_type != 'none':
+        features.append(f'{graph_type} graph')
 
     lines = [
         f'Plugin: {plugin_name}',
@@ -346,6 +362,7 @@ namespace {namespace}
 
 VIEWMODEL_TEMPLATE = '''using DisplayPluginLibrary;
 
+using System.Collections.Generic;
 using MAT.Atlas.Api.Core.Diagnostics;
 using MAT.Atlas.Api.Core.Signals;
 using MAT.Atlas.Client.Platform.Data;
@@ -381,7 +398,8 @@ namespace {namespace}
 }}
 '''
 
-BASIC_VIEWMODEL_TEMPLATE = '''using System.ComponentModel;
+BASIC_VIEWMODEL_TEMPLATE = '''using System.Collections.Generic;
+using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Windows.Input;
 
@@ -406,6 +424,7 @@ namespace {namespace}
 '''
 
 TIMEBASE_VIEWMODEL_TEMPLATE = '''using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
@@ -556,6 +575,8 @@ namespace {namespace}
     {{
         private double maximum = double.NaN;
         private double minimum = double.NaN;
+        private double average = double.NaN;
+        private long? currentTimestamp;
 {current_value_field}
         private string name;
         private int sampleCount;
@@ -595,6 +616,19 @@ namespace {namespace}
             private set => this.SetProperty(ref this.maximum, value);
         }}
 
+        public double Average
+        {{
+            get => this.average;
+            private set => this.SetProperty(ref this.average, value);
+        }}
+
+        [Browsable(false)]
+        public long? CurrentTimestamp
+        {{
+            get => this.currentTimestamp;
+            private set => this.SetProperty(ref this.currentTimestamp, value);
+        }}
+
 {current_value_property}
 
         [Browsable(false)]
@@ -619,6 +653,7 @@ namespace {namespace}
             this.SampleCount = validValues.Length;
             this.Minimum = validValues.Length == 0 ? double.NaN : validValues.Min();
             this.Maximum = validValues.Length == 0 ? double.NaN : validValues.Max();
+            this.Average = validValues.Length == 0 ? double.NaN : validValues.Average();
         }}
 
 {current_value_update_method}
@@ -655,6 +690,7 @@ CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(S
             {
                 var parameterValues = signal.Data.ParameterValues;
                 double value;
+                long timestamp;
                 parameterValues.Lock();
                 try
                 {
@@ -664,6 +700,7 @@ CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(S
                     }
 
                     value = parameterValues.Data[0];
+                    timestamp = parameterValues.Timestamp[0];
                 }
                 finally
                 {
@@ -679,7 +716,7 @@ CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(S
                 {
                     var series = this.Series.FirstOrDefault(item =>
                         item.ParameterIdentifier == signal.Data.Request.RequestId);
-                    series?.UpdateCurrentValue(value);
+                    series?.UpdateCurrentValue(value, timestamp);
                 });
             }
             catch (Exception exception)
@@ -696,9 +733,10 @@ CURRENT_VALUE_PROPERTY = '''        public double CurrentValue
             private set => this.SetProperty(ref this.currentValue, value);
         }'''
 
-CURRENT_VALUE_UPDATE_METHOD = '''        public void UpdateCurrentValue(double value)
+CURRENT_VALUE_UPDATE_METHOD = '''        public void UpdateCurrentValue(double value, long timestamp)
         {
             this.CurrentValue = value;
+            this.CurrentTimestamp = timestamp;
         }'''
 
 CURRENT_VALUE_TEXT = '''                            <TextBlock Text="{Binding CurrentValue, StringFormat='Current: {0:F3}'}"
@@ -997,6 +1035,261 @@ namespace {namespace}
 }}
 '''
 
+GRAPH_SERIES_TEMPLATE = '''using System.Collections.Generic;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public sealed class GraphSeries
+    {{
+        public GraphSeries(string name, IReadOnlyList<long> timestamps, IReadOnlyList<double> values, Color color)
+        {{
+            this.Name = name;
+            this.Timestamps = timestamps;
+            this.Values = values;
+            this.Color = color;
+        }}
+
+        public string Name {{ get; }}
+
+        public IReadOnlyList<long> Timestamps {{ get; }}
+
+        public IReadOnlyList<double> Values {{ get; }}
+
+        public Color Color {{ get; }}
+    }}
+}}
+'''
+
+GRAPH_RENDERER_TEMPLATE = '''using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public sealed class GraphRenderer
+    {{
+        private const string GraphType = "__GRAPH_TYPE__";
+
+        public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            drawingContext.DrawRectangle(Brushes.Transparent, new Pen(Brushes.DimGray, 1), new Rect(extents));
+            var gridPen = new Pen(Brushes.DimGray, 0.5);
+            for (var division = 1; division < 5; division++)
+            {{
+                var x = (extents.Width * division) / 5;
+                var y = (extents.Height * division) / 5;
+                drawingContext.DrawLine(gridPen, new Point(x, 0), new Point(x, extents.Height));
+                drawingContext.DrawLine(gridPen, new Point(0, y), new Point(extents.Width, y));
+            }}
+            if (extents.Width <= 0 || extents.Height <= 0)
+            {{
+                return;
+            }}
+
+            var validSeries = series.Where(item => item.Timestamps.Count > 1 && item.Values.Count > 1).ToList();
+            if (validSeries.Count == 0)
+            {{
+                return;
+            }}
+
+            if (GraphType == "scatter")
+            {{
+                this.DrawScatter(drawingContext, extents, validSeries);
+                return;
+            }}
+
+            if (GraphType == "histogram")
+            {{
+                this.DrawHistogram(drawingContext, extents, validSeries[0]);
+                return;
+            }}
+
+            if (GraphType == "bar")
+            {{
+                this.DrawBars(drawingContext, extents, validSeries);
+                return;
+            }}
+
+            if (GraphType == "custom")
+            {{
+                new CustomGraphRenderer().Draw(drawingContext, extents, validSeries);
+                return;
+            }}
+
+            var start = validSeries.Min(item => item.Timestamps.First());
+            var end = validSeries.Max(item => item.Timestamps.Last());
+            var timeRange = Math.Max(1, end - start);
+            foreach (var item in validSeries)
+            {{
+                this.DrawSeries(drawingContext, extents, item, start, timeRange);
+            }}
+        }}
+
+        public void DrawCursor(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series, long? timestamp)
+        {{
+            if (!timestamp.HasValue || series.Count == 0 || series[0].Timestamps.Count < 2)
+            {{
+                return;
+            }}
+
+            var start = series.Min(item => item.Timestamps.First());
+            var end = series.Max(item => item.Timestamps.Last());
+            if (timestamp.Value < start || timestamp.Value > end)
+            {{
+                return;
+            }}
+
+            var x = ((timestamp.Value - start) / (double)Math.Max(1, end - start)) * extents.Width;
+            drawingContext.DrawLine(new Pen(Brushes.White, 1), new Point(x, 0), new Point(x, extents.Height));
+        }}
+
+        private void DrawSeries(DrawingContext drawingContext, Size extents, GraphSeries series, long start, long timeRange)
+        {{
+            var count = Math.Min(series.Timestamps.Count, series.Values.Count);
+            var finiteValues = series.Values.Take(count).Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToList();
+            if (finiteValues.Count < 2)
+            {{
+                return;
+            }}
+
+            var minimum = finiteValues.Min();
+            var valueRange = Math.Max(double.Epsilon, finiteValues.Max() - minimum);
+            var pen = new Pen(new SolidColorBrush(series.Color), 1.5);
+            Point? previous = null;
+            for (var index = 0; index < count; index++)
+            {{
+                var value = series.Values[index];
+                if (double.IsNaN(value) || double.IsInfinity(value))
+                {{
+                    previous = null;
+                    continue;
+                }}
+
+                var x = ((series.Timestamps[index] - start) / (double)timeRange) * extents.Width;
+                var y = extents.Height - (((value - minimum) / valueRange) * extents.Height);
+                var point = new Point(x, y);
+                if (previous.HasValue)
+                {{
+                    drawingContext.DrawLine(pen, previous.Value, point);
+                }}
+
+                previous = point;
+            }}
+        }}
+
+        private void DrawScatter(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            if (series.Count < 2)
+            {{
+                return;
+            }}
+
+            var count = Math.Min(series[0].Values.Count, series[1].Values.Count);
+            var points = Enumerable.Range(0, count)
+                .Select(index => new {{ X = series[0].Values[index], Y = series[1].Values[index] }})
+                .Where(point => !double.IsNaN(point.X) && !double.IsNaN(point.Y)).ToList();
+            if (points.Count == 0) return;
+            var minX = points.Min(point => point.X);
+            var minY = points.Min(point => point.Y);
+            var rangeX = Math.Max(double.Epsilon, points.Max(point => point.X) - minX);
+            var rangeY = Math.Max(double.Epsilon, points.Max(point => point.Y) - minY);
+            foreach (var point in points)
+            {{
+                var x = ((point.X - minX) / rangeX) * extents.Width;
+                var y = extents.Height - (((point.Y - minY) / rangeY) * extents.Height);
+                drawingContext.DrawEllipse(Brushes.DeepSkyBlue, null, new Point(x, y), 2, 2);
+            }}
+        }}
+
+        private void DrawHistogram(DrawingContext drawingContext, Size extents, GraphSeries series)
+        {{
+            var values = series.Values.Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToList();
+            if (values.Count == 0) return;
+            const int bucketCount = 20;
+            var minimum = values.Min();
+            var range = Math.Max(double.Epsilon, values.Max() - minimum);
+            var buckets = new int[bucketCount];
+            foreach (var value in values)
+            {{
+                var bucket = Math.Min(bucketCount - 1, (int)(((value - minimum) / range) * bucketCount));
+                buckets[bucket]++;
+            }}
+
+            var maximumCount = Math.Max(1, buckets.Max());
+            var width = extents.Width / bucketCount;
+            for (var index = 0; index < bucketCount; index++)
+            {{
+                var height = (buckets[index] / (double)maximumCount) * extents.Height;
+                drawingContext.DrawRectangle(Brushes.DeepSkyBlue, null,
+                    new Rect(index * width, extents.Height - height, Math.Max(1, width - 1), height));
+            }}
+        }}
+
+        private void DrawBars(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            var averages = series.Select(item => item.Values.Where(value => !double.IsNaN(value)).DefaultIfEmpty().Average()).ToList();
+            var maximum = Math.Max(double.Epsilon, averages.Select(Math.Abs).DefaultIfEmpty(1).Max());
+            var width = extents.Width / Math.Max(1, averages.Count);
+            for (var index = 0; index < averages.Count; index++)
+            {{
+                var height = (Math.Abs(averages[index]) / maximum) * extents.Height;
+                drawingContext.DrawRectangle(new SolidColorBrush(series[index].Color), null,
+                    new Rect(index * width, extents.Height - height, Math.Max(1, width - 4), height));
+            }}
+        }}
+
+    }}
+}}
+'''
+
+CUSTOM_GRAPH_RENDERER_TEMPLATE = '''using System.Collections.Generic;
+using System.Windows;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public sealed class CustomGraphRenderer
+    {{
+        public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        {{
+            // TODO: Draw any custom visualization using the supplied series and WPF DrawingContext.
+            // Example: drawingContext.DrawLine(new Pen(Brushes.DeepSkyBlue, 2), start, end);
+        }}
+    }}
+}}
+'''
+
+COMPUTED_GRAPH_SERIES_TEMPLATE = '''using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public static class ComputedGraphSeriesFactory
+    {{
+        public static IEnumerable<GraphSeries> Create(IReadOnlyList<GraphSeries> source)
+        {{
+            if (source.Count < 2)
+            {{
+                yield break;
+            }}
+
+            var first = source[0];
+            var second = source[1];
+            var count = Math.Min(first.Values.Count, second.Values.Count);
+{computed_blocks}
+        }}
+
+        private static double SafeRatio(double left, double right) =>
+            Math.Abs(right) < double.Epsilon ? double.NaN : left / right;
+    }}
+}}
+'''
+
 VIEW_XAML_HEADER = '''<UserControl xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -1028,6 +1321,7 @@ VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                 </DataTemplate>
             </ItemsControl.ItemTemplate>
         </ItemsControl>
+        </DockPanel>
     </ScrollViewer>
 </UserControl>
 '''
@@ -1084,6 +1378,46 @@ TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
 </UserControl>
 '''
 
+TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
+             xmlns:displayPluginLibrary="clr-namespace:DisplayPluginLibrary;assembly=DisplayPluginLibrary"
+             x:Class="{namespace}.{view_class}">
+    <DockPanel>
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+{command_buttons}        </StackPanel>
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="3*" />
+                <ColumnDefinition Width="240" />
+            </Grid.ColumnDefinitions>
+            <Border Margin="6" BorderBrush="DimGray" BorderThickness="1">
+                <Grid>
+                    <displayPluginLibrary:VisualLayer x:Name="GraphVisualLayer" />
+                    <displayPluginLibrary:VisualLayer x:Name="CursorVisualLayer" />
+                </Grid>
+            </Border>
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                <ItemsControl ItemsSource="{{Binding Series}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="DimGray" BorderThickness="0,0,0,1" Padding="8">
+                                <StackPanel>
+                                    <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
+{current_value_text}
+                                    <TextBlock Text="{{Binding Minimum, StringFormat='Minimum: {{0:F3}}'}}" Foreground="White" />
+                                    <TextBlock Text="{{Binding Maximum, StringFormat='Maximum: {{0:F3}}'}}" Foreground="White" />
+                                    <TextBlock Text="{{Binding Average, StringFormat='Average: {{0:F3}}'}}" Foreground="White" />
+                                    <TextBlock Text="{{Binding SampleCount, StringFormat='Samples: {{0}}'}}" Foreground="White" />
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</UserControl>
+'''
+
 BASIC_PLACEHOLDER_CONTENT = '''            <TextBlock Text="{view_class}"
                    VerticalAlignment="Center"
                    HorizontalAlignment="Center"
@@ -1104,7 +1438,9 @@ BASIC_LAYOUTS = ('text', 'form', 'list', 'table', 'blank')
 def build_property_control(spec):
     label = html.escape(spec.get('display_name') or command_display_label(spec['name']), quote=True)
     name = spec['name']
-    if spec['type'] == 'bool':
+    if spec.get('read_only', False):
+        editor = f'<TextBlock Text="{{Binding {name}}}" Foreground="White" />'
+    elif spec['type'] == 'bool':
         editor = f'<CheckBox IsChecked="{{Binding {name}}}" VerticalAlignment="Center" />'
     else:
         editor = (
@@ -1292,8 +1628,15 @@ def build_atlas_parameter(identifier, existing_identifiers=None):
 DISPLAY_PROPERTY_TYPES = {
     'String': 'string',
     'Integer': 'int',
+    'Long integer': 'long',
     'Number': 'double',
+    'Single-precision number': 'float',
+    'Decimal': 'decimal',
     'Boolean': 'bool',
+    'String list': 'List<string>',
+    'Integer list': 'List<int>',
+    'Number list': 'List<double>',
+    'Boolean list': 'List<bool>',
 }
 
 DISPLAY_PROPERTY_ACTIONS = {
@@ -1308,14 +1651,14 @@ def parse_display_property_default(property_type, default_value):
     text = str(default_value or '').strip()
     if property_type == 'string':
         return text
-    if property_type == 'int':
+    if property_type in ('int', 'long'):
         if not text:
             return 0
         try:
             return int(text)
         except ValueError as error:
             raise ValueError('Integer property default must be a whole number.') from error
-    if property_type == 'double':
+    if property_type in ('double', 'float'):
         if not text:
             return 0.0
         try:
@@ -1325,6 +1668,16 @@ def parse_display_property_default(property_type, default_value):
         if not math.isfinite(value):
             raise ValueError('Number property default must be finite.')
         return value
+    if property_type == 'decimal':
+        if not text:
+            return '0'
+        try:
+            value = Decimal(text)
+        except InvalidOperation as error:
+            raise ValueError('Decimal property default must be numeric.') from error
+        if not value.is_finite():
+            raise ValueError('Decimal property default must be finite.')
+        return str(value)
     if property_type == 'bool':
         if not text:
             return False
@@ -1334,12 +1687,34 @@ def parse_display_property_default(property_type, default_value):
         if normalized in ('false', 'no', '0'):
             return False
         raise ValueError('Boolean property default must be true or false.')
+    if property_type.startswith('List<'):
+        if not text:
+            return []
+        try:
+            values = json.loads(text)
+        except json.JSONDecodeError as error:
+            raise ValueError('List defaults must be a JSON array, for example [1, 2, 3].') from error
+        if not isinstance(values, list):
+            raise ValueError('List defaults must be a JSON array, for example [1, 2, 3].')
+        item_type = property_type[5:-1]
+        if item_type == 'string' and not all(isinstance(value, str) for value in values):
+            raise ValueError('String list defaults may only contain strings.')
+        if item_type == 'int' and not all(isinstance(value, int) and not isinstance(value, bool) for value in values):
+            raise ValueError('Integer list defaults may only contain whole numbers.')
+        if item_type == 'double' and not all(
+            isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+            for value in values
+        ):
+            raise ValueError('Number list defaults may only contain finite numbers.')
+        if item_type == 'bool' and not all(isinstance(value, bool) for value in values):
+            raise ValueError('Boolean list defaults may only contain true or false.')
+        return values
     raise ValueError(f'Unsupported display property type: {property_type}')
 
 
 def build_display_property_spec(name, display_name='', category='', description='', order='', persisted=False,
                                 browsable=True, property_type='string', default_value='', change_action='none',
-                                existing_names=None):
+                                read_only=False, existing_names=None):
     name = (name or '').strip()
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
         raise ValueError(f'Display property name "{name}" must be a valid C# identifier.')
@@ -1352,6 +1727,8 @@ def build_display_property_spec(name, display_name='', category='', description=
         raise ValueError(f'Unsupported display property type: {property_type}')
     if change_action not in DISPLAY_PROPERTY_ACTIONS.values():
         raise ValueError(f'Unsupported display property change action: {change_action}')
+    if read_only and change_action != 'none':
+        raise ValueError('A read-only display property cannot run a change action.')
     parsed_default = parse_display_property_default(property_type, default_value)
     order_text = str(order).strip()
     if not order_text:
@@ -1371,6 +1748,7 @@ def build_display_property_spec(name, display_name='', category='', description=
         'type': property_type,
         'default': parsed_default,
         'change_action': change_action,
+        'read_only': bool(read_only),
     }
 
 
@@ -1389,10 +1767,20 @@ def display_property_default_literal(spec):
         return f'"{escape_csharp_string(value)}"'
     if spec['type'] == 'int':
         return str(value)
+    if spec['type'] == 'long':
+        return f'{value}L'
     if spec['type'] == 'double':
         return f'{format(value, ".15g")}d'
+    if spec['type'] == 'float':
+        return f'{format(value, ".8g")}f'
+    if spec['type'] == 'decimal':
+        return f'{value}m'
     if spec['type'] == 'bool':
         return 'true' if value else 'false'
+    if spec['type'].startswith('List<'):
+        item_type = spec['type'][5:-1]
+        literals = [display_property_default_literal({'type': item_type, 'default': item}) for item in value]
+        return f'new {spec["type"]} {{ {", ".join(literals)} }}'
     raise ValueError(f'Unsupported display property type: {spec["type"]}')
 
 
@@ -1406,7 +1794,13 @@ def build_display_property(spec):
         'refresh-all': '                    this.MakeDataRequests(true, true);\n',
     }
     action_statement = action_statements[spec.get('change_action', 'none')]
-    if spec['persisted'] or action_statement:
+    if spec.get('read_only', False):
+        accessor = (
+            f'            get => this.{field} = this.ReadProperty({default_value});\n'
+            if spec['persisted'] else
+            f'            get => this.{field};\n'
+        )
+    elif spec['persisted'] or action_statement:
         save_statement = '                    this.SaveProperty(value);\n' if spec['persisted'] else ''
         accessor = (
             f'            get => this.{field} = this.ReadProperty({default_value});\n'
@@ -1451,6 +1845,7 @@ def build_display_property(spec):
 # Factories/services registered with Autofac, injectable via the ViewModel constructor.
 # Namespaces/param names verified against Atlas.DisplayAPI.Examples usage.
 SERVICE_DEFINITIONS = {
+    'ILogger': {'namespace': 'MAT.Atlas.Api.Core.Diagnostics', 'param': 'logger'},
     'ISignalBus': {'namespace': 'MAT.Atlas.Api.Core.Signals', 'param': 'signalBus'},
     'IDataRequestSignalFactory': {'namespace': 'MAT.Atlas.Client.Platform.Data', 'param': 'dataRequestSignalFactory'},
     'ISessionService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionService'},
@@ -1625,7 +2020,19 @@ def command_display_label(name):
     return re.sub(r'(?<!^)(?=[A-Z])', ' ', name)
 
 
-def build_command_spec(name, button_label='', include_button=True, existing_names=None, generate_can_execute=False):
+COMMAND_ACTIONS = {
+    'Custom code placeholder': 'custom',
+    'Toggle Boolean property': 'toggle',
+    'Set property value': 'set',
+    'Reset property to default': 'reset',
+    'Increment numeric property': 'increment',
+    'Decrement numeric property': 'decrement',
+}
+
+
+def build_command_spec(name, button_label='', include_button=True, existing_names=None, generate_can_execute=False,
+                       generate_log=False, break_when_attached=False, action='custom', target_property='',
+                       action_value=''):
     name = (name or '').strip()
     if name.endswith('Command'):
         name = name[:-len('Command')]
@@ -1633,11 +2040,18 @@ def build_command_spec(name, button_label='', include_button=True, existing_name
         raise ValueError('Command name must be a valid C# identifier.')
     if existing_names and name in existing_names:
         raise ValueError(f'A command named "{name}" already exists.')
+    if action not in COMMAND_ACTIONS.values():
+        raise ValueError(f'Unsupported command action: {action}')
     return {
         'name': name,
         'button_label': (button_label or '').strip() or command_display_label(name),
         'include_button': bool(include_button),
         'generate_can_execute': bool(generate_can_execute),
+        'generate_log': bool(generate_log),
+        'break_when_attached': bool(break_when_attached),
+        'action': action,
+        'target_property': (target_property or '').strip(),
+        'action_value': str(action_value or '').strip(),
     }
 
 
@@ -1656,11 +2070,65 @@ def build_command_initializer(spec):
     )
 
 
-def build_command_handler(spec):
+def validate_command_actions(command_specs, display_property_specs):
+    properties = {spec['name']: spec for spec in display_property_specs}
+    numeric_types = {'int', 'long', 'double', 'float', 'decimal'}
+    for command in command_specs:
+        action = command.get('action', 'custom')
+        if action == 'custom':
+            continue
+        target_name = command.get('target_property', '')
+        target = properties.get(target_name)
+        if not target:
+            raise ValueError(f'Command "{command["name"]}" must target an existing display property.')
+        if target.get('read_only', False):
+            raise ValueError(f'Command "{command["name"]}" cannot change read-only property "{target_name}".')
+        if action == 'toggle' and target['type'] != 'bool':
+            raise ValueError(f'Command "{command["name"]}" can only toggle a Boolean property.')
+        if action in ('increment', 'decrement') and target['type'] not in numeric_types:
+            raise ValueError(f'Command "{command["name"]}" requires a numeric property.')
+        if action == 'set':
+            command['_action_literal'] = display_property_default_literal({
+                'type': target['type'],
+                'default': parse_display_property_default(target['type'], command.get('action_value', '')),
+            })
+
+
+def build_command_action_statement(spec, display_properties=None):
+    action = spec.get('action', 'custom')
+    if action == 'custom':
+        return f'            // TODO: Implement {spec["name"]}.\n'
+    target = spec['target_property']
+    if action == 'toggle':
+        expression = f'!this.{target}'
+    elif action == 'set':
+        expression = spec['_action_literal']
+    elif action == 'reset':
+        target_spec = {item['name']: item for item in (display_properties or [])}[target]
+        expression = display_property_default_literal(target_spec)
+    elif action == 'increment':
+        expression = f'this.{target} + 1'
+    else:
+        expression = f'this.{target} - 1'
+    return f'            this.{target} = {expression};\n'
+
+
+def build_command_handler(spec, logger_expression='this.Logger', display_properties=None):
+    instrumentation = ''
+    if spec.get('generate_log', False):
+        instrumentation += f'            {logger_expression}.Trace("Command {spec["name"]} executed.");\n'
+    if spec.get('break_when_attached', False):
+        instrumentation += (
+            '            if (Debugger.IsAttached)\n'
+            '            {\n'
+            '                Debugger.Break();\n'
+            '            }\n'
+        )
     handler = (
         f'        private void On{spec["name"]}()\n'
         '        {\n'
-        f'            // TODO: Implement {spec["name"]}.\n'
+        f'{instrumentation}'
+        f'{build_command_action_statement(spec, display_properties)}'
         '        }\n'
     )
     if not spec.get('generate_can_execute', False):
@@ -1714,6 +2182,112 @@ def build_status_state():
 '''
     return fields, properties
 
+GRAPH_VIEW_CODEBEHIND_TEMPLATE = '''using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.ComponentModel;
+using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+
+namespace {namespace}
+{{
+    public partial class {view_class} : UserControl
+    {{
+        private static readonly Color[] Palette =
+        {{
+            Colors.DeepSkyBlue, Colors.Orange, Colors.LimeGreen, Colors.Magenta,
+            Colors.Gold, Colors.Cyan, Colors.Red, Colors.MediumPurple,
+        }};
+        private readonly GraphRenderer graphRenderer = new GraphRenderer();
+        private {viewmodel_class} viewModel;
+
+        public {view_class}()
+        {{
+            this.InitializeComponent();
+            this.DataContextChanged += this.OnDataContextChanged;
+            this.SizeChanged += (sender, args) => this.Redraw();
+        }}
+
+        private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs args)
+        {{
+            this.Detach();
+            this.viewModel = args.NewValue as {viewmodel_class};
+            if (this.viewModel != null)
+            {{
+                this.viewModel.Series.CollectionChanged += this.OnSeriesCollectionChanged;
+                this.AttachSeries();
+            }}
+
+            this.Redraw();
+        }}
+
+        private void OnSeriesCollectionChanged(object sender, NotifyCollectionChangedEventArgs args)
+        {{
+            this.AttachSeries();
+            this.Redraw();
+        }}
+
+        private void AttachSeries()
+        {{
+            if (this.viewModel == null)
+            {{
+                return;
+            }}
+
+            foreach (var item in this.viewModel.Series)
+            {{
+                item.PropertyChanged -= this.OnSeriesPropertyChanged;
+                item.PropertyChanged += this.OnSeriesPropertyChanged;
+            }}
+        }}
+
+        private void OnSeriesPropertyChanged(object sender, PropertyChangedEventArgs args)
+        {{
+            if (args.PropertyName == nameof(TimebaseSeriesViewModel.Values) ||
+                args.PropertyName == nameof(TimebaseSeriesViewModel.Timestamps) ||
+                args.PropertyName == nameof(TimebaseSeriesViewModel.CurrentTimestamp))
+            {{
+                this.Redraw();
+            }}
+        }}
+
+        private void Detach()
+        {{
+            if (this.viewModel == null)
+            {{
+                return;
+            }}
+
+            this.viewModel.Series.CollectionChanged -= this.OnSeriesCollectionChanged;
+            foreach (var item in this.viewModel.Series)
+            {{
+                item.PropertyChanged -= this.OnSeriesPropertyChanged;
+            }}
+        }}
+
+        private void Redraw()
+        {{
+            var visual = this.GraphVisualLayer.Visual;
+            var series = this.viewModel?.Series.Select((item, index) => new GraphSeries(
+                item.Name,
+                item.Timestamps,
+                item.Values,
+                Palette[index % Palette.Length])).ToList() ?? new List<GraphSeries>();
+{computed_series_update}
+            visual.Draw(context => this.graphRenderer.Draw(context, visual.Extents, series));
+            var cursorVisual = this.CursorVisualLayer.Visual;
+            var cursorTimestamp = this.viewModel?.Series.Select(item => item.CurrentTimestamp).FirstOrDefault(value => value.HasValue);
+            cursorVisual.Draw(context => this.graphRenderer.DrawCursor(
+                context,
+                cursorVisual.Extents,
+                series,
+                cursorTimestamp));
+        }}
+    }}
+}}
+'''
+
 
 def build_item_field_spec(value):
     parts = [part.strip() for part in str(value or '').split(':', 1)]
@@ -1724,6 +2298,34 @@ def build_item_field_spec(value):
     if property_type not in DISPLAY_PROPERTY_TYPES.values():
         raise ValueError(f'Unsupported item field type: {property_type}')
     return {'name': name, 'type': property_type}
+
+
+def build_computed_series_spec(value):
+    parts = [part.strip() for part in str(value or '').split(':', 1)]
+    if len(parts) != 2 or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_ ]*', parts[0]):
+        raise ValueError('Computed series must use Name:operation.')
+    operation = parts[1].lower()
+    if operation not in ('difference', 'sum', 'average', 'ratio'):
+        raise ValueError(f'Unsupported computed series operation: {operation}')
+    return {'name': parts[0], 'operation': operation}
+
+
+def build_computed_series_blocks(specs):
+    expressions = {
+        'difference': 'first.Values[index] - second.Values[index]',
+        'sum': 'first.Values[index] + second.Values[index]',
+        'average': '(first.Values[index] + second.Values[index]) / 2d',
+        'ratio': 'SafeRatio(first.Values[index], second.Values[index])',
+    }
+    blocks = []
+    for spec in specs:
+        name = escape_csharp_string(spec['name'])
+        expression = expressions[spec['operation']]
+        blocks.append(
+            f'            yield return new GraphSeries("{name}", first.Timestamps.Take(count).ToArray(),\n'
+            f'                Enumerable.Range(0, count).Select(index => {expression}).ToArray(), Colors.White);'
+        )
+    return '\n'.join(blocks)
 
 
 def build_item_members(field_specs):
@@ -1812,7 +2414,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     include_status_state=False, include_lifecycle_hooks=False,
                     include_session_notifications=False, include_item_collection=False,
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
-                    item_field_specs=None, dll_specs=None, atlas_install_directory=None):
+                    item_field_specs=None, graph_type='none', computed_series_specs=None, dll_specs=None, atlas_install_directory=None):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -1827,8 +2429,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     atlas_parameters = validated_atlas_parameters
     display_property_specs = list(display_property_specs or [])
     command_specs = list(command_specs or [])
+    computed_series_specs = list(computed_series_specs or [])
     dll_specs = normalize_dll_specs(dll_specs)
     validate_display_property_actions(display_property_specs, behavior)
+    validate_command_actions(command_specs, display_property_specs)
     if atlas_parameters and not include_parameters:
         raise ValueError('ATLAS parameters require a data behavior.')
     if include_item_collection and behavior != BEHAVIOR_BASIC:
@@ -1837,6 +2441,12 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError(f'Unknown basic view layout: {basic_layout}')
     if behavior != BEHAVIOR_BASIC and basic_layout != 'text':
         raise ValueError('View layout selection is only available for basic displays.')
+    if graph_type not in ('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'):
+        raise ValueError(f'Unknown graph type: {graph_type}')
+    if graph_type != 'none' and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
+        raise ValueError('Time-series graphs require a visible-range behavior.')
+    if computed_series_specs and graph_type == 'none':
+        raise ValueError('Computed series require a graph.')
     if include_item_collection and basic_layout == 'text':
         basic_layout = 'list'
     include_item_collection = include_item_collection or basic_layout in ('list', 'table')
@@ -1931,7 +2541,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         view_template = VIEW_XAML_TEMPLATE
     elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         viewmodel_template = TIMEBASE_VIEWMODEL_TEMPLATE
-        view_template = TIMEBASE_VIEW_XAML_TEMPLATE
+        view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if graph_type != 'none' else TIMEBASE_VIEW_XAML_TEMPLATE
     elif behavior == BEHAVIOR_COMPARE_SESSIONS:
         viewmodel_template = COMPARE_VIEWMODEL_TEMPLATE
         view_template = COMPARE_VIEW_XAML_TEMPLATE
@@ -1955,8 +2565,14 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
 
     # ISignalBus/IDataRequestSignalFactory are always injected by ParameterSampleDisplayViewModelBase.
     requested_services = list(service_names or [])
+    if behavior == BEHAVIOR_BASIC and any(spec.get('generate_log', False) for spec in command_specs):
+        if 'ILogger' not in requested_services:
+            requested_services.append('ILogger')
     if include_parameters:
-        extra_service_names = [n for n in requested_services if n not in ('ISignalBus', 'IDataRequestSignalFactory')]
+        extra_service_names = [
+            n for n in requested_services
+            if n not in ('ILogger', 'ISignalBus', 'IDataRequestSignalFactory')
+        ]
     else:
         extra_service_names = requested_services
     service_entries = build_service_entries(extra_service_names)
@@ -1965,12 +2581,18 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         extra_usings += 'using MAT.Atlas.Client.Platform.Sessions;\n'
     if include_item_collection:
         extra_usings += 'using System.Collections.ObjectModel;\n'
+    if any(spec.get('break_when_attached', False) for spec in command_specs):
+        extra_usings += 'using System.Diagnostics;\n'
     extra_ctor_params = ''
     extra_ctor_assignments = ''
     service_members = ''
     command_properties = '\n'.join(build_command_property(spec) for spec in command_specs)
     command_initializers = ''.join(build_command_initializer(spec) for spec in command_specs)
-    command_handlers = '\n'.join(build_command_handler(spec) for spec in command_specs)
+    logger_expression = 'this.Logger' if include_parameters else 'this.logger'
+    command_handlers = '\n'.join(
+        build_command_handler(spec, logger_expression, display_property_specs)
+        for spec in command_specs
+    )
     command_buttons = ''.join(build_command_button(spec) for spec in command_specs)
     status_state_fields, status_state_properties = build_status_state() if include_status_state else ('', '')
     session_notification_hooks = build_session_notification_hooks() if include_session_notifications else ''
@@ -2042,6 +2664,17 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             current_value_property=CURRENT_VALUE_PROPERTY if include_current_value else '',
             current_value_update_method=CURRENT_VALUE_UPDATE_METHOD if include_current_value else '',
         )
+        if graph_type != 'none':
+            files['GraphSeries.cs'] = GRAPH_SERIES_TEMPLATE.format(namespace=namespace)
+            files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace).replace(
+                '__GRAPH_TYPE__', graph_type
+            )
+            files['CustomGraphRenderer.cs'] = CUSTOM_GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
+            if computed_series_specs:
+                files['ComputedGraphSeriesFactory.cs'] = COMPUTED_GRAPH_SERIES_TEMPLATE.format(
+                    namespace=namespace,
+                    computed_blocks=build_computed_series_blocks(computed_series_specs),
+                )
     elif behavior == BEHAVIOR_COMPARE_SESSIONS:
         files['CompareRowViewModel.cs'] = COMPARE_ROW_VIEWMODEL_TEMPLATE.format(namespace=namespace)
         files['CompareSessionValueViewModel.cs'] = COMPARE_SESSION_VALUE_VIEWMODEL_TEMPLATE.format(
@@ -2068,9 +2701,15 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 item_field_specs[0]['name'],
             ),
         )
-        files[f'{name}View.xaml.cs'] = VIEW_CODEBEHIND_TEMPLATE.format(
+        codebehind_template = GRAPH_VIEW_CODEBEHIND_TEMPLATE if graph_type != 'none' else VIEW_CODEBEHIND_TEMPLATE
+        files[f'{name}View.xaml.cs'] = codebehind_template.format(
             namespace=namespace,
             view_class=f'{name}View',
+            viewmodel_class=f'{name}ViewModel',
+            computed_series_update=(
+                '            series.AddRange(ComputedGraphSeriesFactory.Create(series).ToList());'
+                if computed_series_specs else ''
+            ),
         )
 
     for filename, content in files.items():
@@ -2104,6 +2743,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
 class PluginGeneratorApp(tk.Tk):
     def __init__(self):
         super().__init__()
+        self.generated_icon_temp_directory = None
         self.title('ATLAS Display Plugin Generator')
         self.minsize(480, 400)
         self.resizable(True, True)
@@ -2169,7 +2809,8 @@ class PluginGeneratorApp(tk.Tk):
 
         tk.Label(output_frame, text='Plugin icon (.png):').grid(row=2, column=0, sticky='w', pady=6)
         self.icon_var = tk.StringVar(value=settings.get('icon_path', ''))
-        tk.Entry(output_frame, textvariable=self.icon_var, width=45).grid(row=2, column=1, sticky='ew', padx=8)
+        self.icon_entry = tk.Entry(output_frame, textvariable=self.icon_var, width=45)
+        self.icon_entry.grid(row=2, column=1, sticky='ew', padx=8)
         tk.Button(output_frame, text='Browse', command=self.browse_icon).grid(row=2, column=2, padx=6)
         tk.Button(output_frame, text='Create...', command=self.create_icon).grid(row=2, column=3, padx=6)
 
@@ -2252,9 +2893,6 @@ class PluginGeneratorApp(tk.Tk):
         )
         self.basic_layout_combo.pack(fill=tk.X, pady=(0, 4))
         
-        self.add_view_var = tk.BooleanVar(value=True)
-        tk.Checkbutton(config_frame, text='Include simple WPF View', variable=self.add_view_var).pack(anchor='w', pady=4)
-
         # === Injected Services ===
         services_frame = tk.LabelFrame(scrollable_frame, text='Injected Services', padx=8, pady=8)
         services_frame.pack(fill=tk.X, pady=8)
@@ -2296,7 +2934,7 @@ class PluginGeneratorApp(tk.Tk):
 
         self.display_property_specs = []
 
-        tree_columns = ('identifier', 'type', 'default', 'action', 'display_name', 'persisted', 'browsable')
+        tree_columns = ('identifier', 'type', 'default', 'action', 'display_name', 'persisted', 'read_only', 'browsable')
         column_headings = {
             'identifier': 'Identifier',
             'type': 'Type',
@@ -2304,6 +2942,7 @@ class PluginGeneratorApp(tk.Tk):
             'action': 'When Changed',
             'display_name': 'Display Name',
             'persisted': 'Persisted',
+            'read_only': 'Read Only',
             'browsable': 'Browsable',
         }
         column_widths = {
@@ -2313,6 +2952,7 @@ class PluginGeneratorApp(tk.Tk):
             'action': 130,
             'display_name': 120,
             'persisted': 65,
+            'read_only': 65,
             'browsable': 65,
         }
         self.property_tree = ttk.Treeview(property_frame, columns=tree_columns, show='headings', height=6)
@@ -2340,18 +2980,26 @@ class PluginGeneratorApp(tk.Tk):
         self.command_specs = []
         self.command_tree = ttk.Treeview(
             command_frame,
-            columns=('name', 'button_label', 'include_button', 'can_execute'),
+            columns=('name', 'action', 'target', 'button_label', 'include_button', 'can_execute', 'log', 'breakpoint'),
             show='headings',
             height=4,
         )
         self.command_tree.heading('name', text='Command')
+        self.command_tree.heading('action', text='Action')
+        self.command_tree.heading('target', text='Target')
         self.command_tree.heading('button_label', text='Button Label')
         self.command_tree.heading('include_button', text='Add Button')
         self.command_tree.heading('can_execute', text='Enabled Rule')
+        self.command_tree.heading('log', text='Log')
+        self.command_tree.heading('breakpoint', text='Debug Break')
         self.command_tree.column('name', width=150, anchor='w')
+        self.command_tree.column('action', width=145, anchor='w')
+        self.command_tree.column('target', width=100, anchor='w')
         self.command_tree.column('button_label', width=180, anchor='w')
         self.command_tree.column('include_button', width=80, anchor='w')
         self.command_tree.column('can_execute', width=100, anchor='w')
+        self.command_tree.column('log', width=55, anchor='w')
+        self.command_tree.column('breakpoint', width=85, anchor='w')
         self.command_tree.pack(fill=tk.BOTH, expand=True, pady=4)
         self.command_tree.bind('<Double-1>', lambda event: self.edit_selected_command())
 
@@ -2420,6 +3068,21 @@ class PluginGeneratorApp(tk.Tk):
         self.item_fields_var = tk.StringVar(value='Name:string')
         self.item_fields_entry = tk.Entry(advanced_frame, textvariable=self.item_fields_var, width=36)
         self.item_fields_entry.grid(row=9, column=1, sticky='ew', padx=8)
+
+        tk.Label(advanced_frame, text='Graph:').grid(row=10, column=0, sticky='w', pady=4)
+        self.graph_type_var = tk.StringVar(value='none')
+        self.graph_type_combo = ttk.Combobox(
+            advanced_frame,
+            textvariable=self.graph_type_var,
+            values=('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'),
+            state='disabled',
+            width=22,
+        )
+        self.graph_type_combo.grid(row=10, column=1, sticky='w', padx=8)
+        tk.Label(advanced_frame, text='Computed series (Name:operation):').grid(row=11, column=0, sticky='w', pady=4)
+        self.computed_series_var = tk.StringVar(value='')
+        self.computed_series_entry = tk.Entry(advanced_frame, textvariable=self.computed_series_var, width=36)
+        self.computed_series_entry.grid(row=11, column=1, sticky='ew', padx=8)
         
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
@@ -2480,7 +3143,8 @@ class PluginGeneratorApp(tk.Tk):
             filetypes=[('PNG image', '*.png')],
         )
         if path:
-            self.icon_var.set(path)
+            self.clear_generated_icon_temp_directory()
+            self.set_icon_path(path)
 
     def browse_atlas_install(self):
         initial = self.atlas_install_var.get().strip()
@@ -2516,7 +3180,15 @@ class PluginGeneratorApp(tk.Tk):
         except RuntimeError as error:
             messagebox.showerror('Remove Deployed Plugins', str(error))
             return
-        self.after(1000, self.refresh_deployed_plugins)
+        self._refresh_after_deployed_removal(plugin_paths)
+
+    def _refresh_after_deployed_removal(self, plugin_paths, attempts_remaining=30):
+        self.refresh_deployed_plugins()
+        if attempts_remaining > 0 and any(os.path.exists(path) for path in plugin_paths):
+            self.after(
+                500,
+                lambda: self._refresh_after_deployed_removal(plugin_paths, attempts_remaining - 1),
+            )
 
     def refresh_dll_tree(self):
         self.dll_tree.delete(*self.dll_tree.get_children())
@@ -2556,9 +3228,8 @@ class PluginGeneratorApp(tk.Tk):
         if not selections:
             messagebox.showinfo('DLL Manager', 'Select one or more DLLs to remove.')
             return
-        indexes = sorted((self.dll_tree.index(item) for item in selections), reverse=True)
-        for index in indexes:
-            del self.dll_specs[index]
+        selected_paths = [self.dll_tree.item(item, 'values')[3] for item in selections]
+        self.dll_specs = remove_dll_specs(self.dll_specs, selected_paths)
         self.refresh_dll_tree()
 
     def add_atlas_dlls(self):
@@ -2656,16 +3327,36 @@ class PluginGeneratorApp(tk.Tk):
     def create_icon(self):
         from .icon_maker import open_icon_maker
 
-        initial = self.icon_var.get().strip()
-        if os.path.isfile(initial):
-            initial_directory = os.path.dirname(initial)
-        elif self.out_var.get().strip() and os.path.isdir(self.out_var.get().strip()):
-            initial_directory = self.out_var.get().strip()
-        else:
-            initial_directory = os.getcwd()
-        path = open_icon_maker(self, initial_directory)
-        if path:
-            self.icon_var.set(path)
+        self.clear_generated_icon_temp_directory()
+        temporary_directory = tempfile.mkdtemp(prefix='PluginGeneratorIcon-')
+        self.generated_icon_temp_directory = temporary_directory
+        path = open_icon_maker(
+            self,
+            temporary_directory,
+            os.path.join(temporary_directory, 'icon.png'),
+            self.set_icon_path,
+        )
+        if not path:
+            self.clear_generated_icon_temp_directory()
+
+    def set_icon_path(self, path):
+        self.icon_var.set(os.path.abspath(path))
+        self.icon_entry.icursor(tk.END)
+        self.icon_entry.xview_moveto(1.0)
+        self.update_idletasks()
+
+    def clear_generated_icon_temp_directory(self):
+        if self.generated_icon_temp_directory:
+            current_icon = self.icon_var.get().strip() if hasattr(self, 'icon_var') else ''
+            temporary_directory = os.path.abspath(self.generated_icon_temp_directory)
+            if current_icon:
+                try:
+                    if os.path.commonpath((temporary_directory, os.path.abspath(current_icon))) == temporary_directory:
+                        self.icon_var.set('')
+                except ValueError:
+                    pass
+            shutil.rmtree(self.generated_icon_temp_directory, ignore_errors=True)
+            self.generated_icon_temp_directory = None
 
     def refresh_property_tree(self):
         self.property_tree.delete(*self.property_tree.get_children())
@@ -2680,6 +3371,7 @@ class PluginGeneratorApp(tk.Tk):
                 ),
                 spec['display_name'],
                 'Yes' if spec['persisted'] else 'No',
+                'Yes' if spec.get('read_only', False) else 'No',
                 'Yes' if spec['browsable'] else 'No',
             ))
 
@@ -2734,6 +3426,7 @@ class PluginGeneratorApp(tk.Tk):
         description_var = tk.StringVar(value=initial.get('description', ''))
         order_var = tk.StringVar(value='' if initial.get('order') is None else str(initial['order']))
         persisted_var = tk.BooleanVar(value=initial.get('persisted', False))
+        read_only_var = tk.BooleanVar(value=initial.get('read_only', False))
         browsable_var = tk.BooleanVar(value=initial.get('browsable', True))
 
         fields = [
@@ -2763,8 +3456,10 @@ class PluginGeneratorApp(tk.Tk):
                 )
         tk.Checkbutton(dialog, text='Persist to workbook', variable=persisted_var).grid(
             row=len(fields), column=0, columnspan=2, sticky='w', padx=8, pady=6)
-        tk.Checkbutton(dialog, text='Visible in properties window (Browsable)', variable=browsable_var).grid(
+        tk.Checkbutton(dialog, text='Read-only (generated without a setter)', variable=read_only_var).grid(
             row=len(fields) + 1, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        tk.Checkbutton(dialog, text='Visible in properties window (Browsable)', variable=browsable_var).grid(
+            row=len(fields) + 2, column=0, columnspan=2, sticky='w', padx=8, pady=6)
         dialog.columnconfigure(1, weight=1)
 
         result = {}
@@ -2785,6 +3480,7 @@ class PluginGeneratorApp(tk.Tk):
                     DISPLAY_PROPERTY_TYPES[type_var.get()],
                     default_var.get(),
                     DISPLAY_PROPERTY_ACTIONS[action_var.get()],
+                    read_only_var.get(),
                     existing_names=existing_names,
                 )
             except ValueError as error:
@@ -2796,7 +3492,7 @@ class PluginGeneratorApp(tk.Tk):
             dialog.destroy()
 
         button_frame = tk.Frame(dialog)
-        button_frame.grid(row=len(fields) + 2, column=0, columnspan=2, pady=10)
+        button_frame.grid(row=len(fields) + 3, column=0, columnspan=2, pady=10)
         tk.Button(button_frame, text='OK', command=on_ok, width=10).pack(side=tk.LEFT, padx=4)
         tk.Button(button_frame, text='Cancel', command=on_cancel, width=10).pack(side=tk.LEFT, padx=4)
 
@@ -2809,9 +3505,13 @@ class PluginGeneratorApp(tk.Tk):
         for spec in self.command_specs:
             self.command_tree.insert('', tk.END, values=(
                 f'{spec["name"]}Command',
+                next(label for label, action in COMMAND_ACTIONS.items() if action == spec.get('action', 'custom')),
+                spec.get('target_property', ''),
                 spec['button_label'],
                 'Yes' if spec['include_button'] else 'No',
                 'Generated' if spec.get('generate_can_execute', False) else 'Always',
+                'Yes' if spec.get('generate_log', False) else 'No',
+                'Yes' if spec.get('break_when_attached', False) else 'No',
             ))
 
     def add_command_dialog(self):
@@ -2853,19 +3553,62 @@ class PluginGeneratorApp(tk.Tk):
         button_label_var = tk.StringVar(value=initial.get('button_label', ''))
         include_button_var = tk.BooleanVar(value=initial.get('include_button', True))
         can_execute_var = tk.BooleanVar(value=initial.get('generate_can_execute', False))
+        generate_log_var = tk.BooleanVar(value=initial.get('generate_log', False))
+        breakpoint_var = tk.BooleanVar(value=initial.get('break_when_attached', False))
+        initial_action = initial.get('action', 'custom')
+        action_var = tk.StringVar(value=next(
+            label for label, action in COMMAND_ACTIONS.items() if action == initial_action
+        ))
+        target_property_var = tk.StringVar(value=initial.get('target_property', ''))
+        action_value_var = tk.StringVar(value=initial.get('action_value', ''))
 
         tk.Label(dialog, text='Action Name (required):').grid(row=0, column=0, sticky='w', padx=8, pady=6)
         tk.Entry(dialog, textvariable=name_var, width=35).grid(row=0, column=1, sticky='ew', padx=8, pady=6)
         tk.Label(dialog, text='Button Label:').grid(row=1, column=0, sticky='w', padx=8, pady=6)
         tk.Entry(dialog, textvariable=button_label_var, width=35).grid(row=1, column=1, sticky='ew', padx=8, pady=6)
+        tk.Label(dialog, text='Command Action:').grid(row=2, column=0, sticky='w', padx=8, pady=6)
+        action_combo = ttk.Combobox(
+            dialog, textvariable=action_var, values=tuple(COMMAND_ACTIONS), state='readonly', width=32
+        )
+        action_combo.grid(row=2, column=1, sticky='ew', padx=8, pady=6)
+        tk.Label(dialog, text='Target Property:').grid(row=3, column=0, sticky='w', padx=8, pady=6)
+        target_combo = ttk.Combobox(
+            dialog,
+            textvariable=target_property_var,
+            values=tuple(spec['name'] for spec in self.display_property_specs),
+            state='readonly',
+            width=32,
+        )
+        target_combo.grid(row=3, column=1, sticky='ew', padx=8, pady=6)
+        tk.Label(dialog, text='Value (for Set):').grid(row=4, column=0, sticky='w', padx=8, pady=6)
+        value_entry = tk.Entry(dialog, textvariable=action_value_var, width=35)
+        value_entry.grid(row=4, column=1, sticky='ew', padx=8, pady=6)
         tk.Checkbutton(dialog, text='Add button to generated view', variable=include_button_var).grid(
-            row=2, column=0, columnspan=2, sticky='w', padx=8, pady=6
+            row=5, column=0, columnspan=2, sticky='w', padx=8, pady=6
         )
         tk.Checkbutton(
             dialog,
             text='Generate an enabled/disabled rule (CanExecute)',
             variable=can_execute_var,
-        ).grid(row=3, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        ).grid(row=6, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        tk.Checkbutton(
+            dialog,
+            text='Log when the command runs (injects ILogger when needed)',
+            variable=generate_log_var,
+        ).grid(row=7, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+        tk.Checkbutton(
+            dialog,
+            text='Break into the debugger when one is attached',
+            variable=breakpoint_var,
+        ).grid(row=8, column=0, columnspan=2, sticky='w', padx=8, pady=6)
+
+        def update_action_fields(*_args):
+            action = COMMAND_ACTIONS[action_var.get()]
+            target_combo.config(state='disabled' if action == 'custom' else 'readonly')
+            value_entry.config(state=tk.NORMAL if action == 'set' else tk.DISABLED)
+
+        action_combo.bind('<<ComboboxSelected>>', update_action_fields)
+        update_action_fields()
         dialog.columnconfigure(1, weight=1)
 
         result = {}
@@ -2873,20 +3616,27 @@ class PluginGeneratorApp(tk.Tk):
         def on_ok():
             existing_names = {spec['name'] for spec in self.command_specs if spec['name'] != editing_name}
             try:
-                result['spec'] = build_command_spec(
+                command_spec = build_command_spec(
                     name_var.get(),
                     button_label_var.get(),
                     include_button_var.get(),
                     existing_names,
                     can_execute_var.get(),
+                    generate_log_var.get(),
+                    breakpoint_var.get(),
+                    COMMAND_ACTIONS[action_var.get()],
+                    target_property_var.get(),
+                    action_value_var.get(),
                 )
+                validate_command_actions([command_spec], self.display_property_specs)
+                result['spec'] = command_spec
             except ValueError as error:
                 messagebox.showerror('Invalid Command', str(error), parent=dialog)
                 return
             dialog.destroy()
 
         button_frame = tk.Frame(dialog)
-        button_frame.grid(row=4, column=0, columnspan=2, pady=10)
+        button_frame.grid(row=9, column=0, columnspan=2, pady=10)
         tk.Button(button_frame, text='OK', command=on_ok, width=10).pack(side=tk.LEFT, padx=4)
         tk.Button(button_frame, text='Cancel', command=dialog.destroy, width=10).pack(side=tk.LEFT, padx=4)
         dialog.protocol('WM_DELETE_WINDOW', dialog.destroy)
@@ -2894,6 +3644,7 @@ class PluginGeneratorApp(tk.Tk):
         return result.get('spec')
 
     def reset_form(self):
+        self.clear_generated_icon_temp_directory()
         self.name_var.set('')
         self.description_var.set('')
         self.atlas_parameter_text.delete('1.0', tk.END)
@@ -2905,7 +3656,6 @@ class PluginGeneratorApp(tk.Tk):
         self.icon_var.set('')
         self.atlas_install_var.set(DEFAULT_ATLAS_INSTALL_DIRECTORY)
         self.parameter_max_var.set('100')
-        self.add_view_var.set(True)
         self.behavior_var.set(BEHAVIOR_CURRENT_VALUE)
         self.basic_layout_var.set('text')
         for service_var in self.service_vars.values():
@@ -2920,12 +3670,14 @@ class PluginGeneratorApp(tk.Tk):
         self.collection_name_var.set('Items')
         self.item_class_name_var.set('ItemViewModel')
         self.item_fields_var.set('Name:string')
+        self.graph_type_var.set('none')
+        self.computed_series_var.set('')
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
         # Data behaviors inject these services through DisplayPluginLibrary base classes.
         parameters_enabled = behavior_uses_parameters(self.behavior_var.get())
-        for service_name in ('ISignalBus', 'IDataRequestSignalFactory'):
+        for service_name in ('ILogger', 'ISignalBus', 'IDataRequestSignalFactory'):
             checkbutton = self.service_checkbuttons[service_name]
             if parameters_enabled:
                 self.service_vars[service_name].set(True)
@@ -2947,6 +3699,11 @@ class PluginGeneratorApp(tk.Tk):
         for widget_name in ('collection_name_entry', 'item_class_name_entry', 'item_fields_entry'):
             if hasattr(self, widget_name):
                 getattr(self, widget_name).config(state=tk.NORMAL if not parameters_enabled else tk.DISABLED)
+        if hasattr(self, 'graph_type_combo'):
+            graph_enabled = self.behavior_var.get() in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE)
+            self.graph_type_combo.config(state='readonly' if graph_enabled else 'disabled')
+            if not graph_enabled:
+                self.graph_type_var.set('none')
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output, library, icon, and ATLAS paths?'):
@@ -2964,7 +3721,6 @@ class PluginGeneratorApp(tk.Tk):
             'description': self.description_var.get(),
             'behavior': self.behavior_var.get(),
             'basic_layout': self.basic_layout_var.get(),
-            'include_view': self.add_view_var.get(),
             'atlas_parameters': self.atlas_parameter_text.get('1.0', tk.END).splitlines(),
             'display_properties': self.display_property_specs,
             'commands': self.command_specs,
@@ -2977,6 +3733,8 @@ class PluginGeneratorApp(tk.Tk):
             'collection_name': self.collection_name_var.get(),
             'item_class_name': self.item_class_name_var.get(),
             'item_fields': self.item_fields_var.get(),
+            'graph_type': self.graph_type_var.get(),
+            'computed_series': self.computed_series_var.get(),
         }
 
     def apply_preset_configuration(self, configuration):
@@ -2984,7 +3742,6 @@ class PluginGeneratorApp(tk.Tk):
         self.description_var.set(configuration.get('description', ''))
         self.behavior_var.set(configuration.get('behavior', BEHAVIOR_CURRENT_VALUE))
         self.basic_layout_var.set(configuration.get('basic_layout', 'text'))
-        self.add_view_var.set(configuration.get('include_view', True))
         self.atlas_parameter_text.delete('1.0', tk.END)
         self.atlas_parameter_text.insert('1.0', '\n'.join(configuration.get('atlas_parameters', [])))
         self.display_property_specs = list(configuration.get('display_properties', []))
@@ -3004,6 +3761,8 @@ class PluginGeneratorApp(tk.Tk):
         self.collection_name_var.set(configuration.get('collection_name', 'Items'))
         self.item_class_name_var.set(configuration.get('item_class_name', 'ItemViewModel'))
         self.item_fields_var.set(configuration.get('item_fields', 'Name:string'))
+        self.graph_type_var.set(configuration.get('graph_type', 'none'))
+        self.computed_series_var.set(configuration.get('computed_series', ''))
         self.update_behavior_states()
 
     def save_preset_dialog(self):
@@ -3059,13 +3818,18 @@ class PluginGeneratorApp(tk.Tk):
                 for value in self.item_fields_var.get().split(',')
                 if value.strip()
             ]
+            computed_series_specs = [
+                build_computed_series_spec(value)
+                for value in self.computed_series_var.get().split(',')
+                if value.strip()
+            ]
             if atlas_parameters and not include_parameters:
                 raise ValueError('ATLAS parameters require Current value or Visible range behavior.')
             service_names = [name for name, var in self.service_vars.items() if var.get()]
             summary = build_generation_summary(
                 name,
                 self.behavior_var.get(),
-                self.add_view_var.get(),
+                True,
                 atlas_parameters,
                 display_property_specs,
                 command_specs,
@@ -3078,6 +3842,7 @@ class PluginGeneratorApp(tk.Tk):
                 collection_name=self.collection_name_var.get().strip(),
                 item_class_name=self.item_class_name_var.get().strip(),
                 item_field_specs=item_field_specs,
+                graph_type=self.graph_type_var.get(),
                 dll_specs=self.dll_specs,
             )
             if not messagebox.askokcancel('Generation Preview', summary):
@@ -3086,7 +3851,7 @@ class PluginGeneratorApp(tk.Tk):
             target = generate_plugin(
                 name,
                 base_out,
-                include_view=self.add_view_var.get(),
+                include_view=True,
                 include_parameters=include_parameters,
                 behavior=self.behavior_var.get(),
                 atlas_parameters=atlas_parameters,
@@ -3100,6 +3865,8 @@ class PluginGeneratorApp(tk.Tk):
                 collection_name=self.collection_name_var.get().strip(),
                 item_class_name=self.item_class_name_var.get().strip(),
                 item_field_specs=item_field_specs,
+                graph_type=self.graph_type_var.get(),
+                computed_series_specs=computed_series_specs,
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,
@@ -3109,10 +3876,18 @@ class PluginGeneratorApp(tk.Tk):
                 dll_specs=self.dll_specs,
                 atlas_install_directory=self.atlas_install_var.get().strip(),
             )
+            copied_icon_path = os.path.join(
+                target,
+                os.path.basename(target),
+                'Resources',
+                os.path.basename(icon_path),
+            )
+            self.clear_generated_icon_temp_directory()
+            self.set_icon_path(copied_icon_path)
             save_settings({
                 'output_folder': base_out,
                 'library_project': library_project,
-                'icon_path': icon_path,
+                'icon_path': copied_icon_path,
                 'atlas_install_directory': self.atlas_install_var.get().strip(),
             })
 

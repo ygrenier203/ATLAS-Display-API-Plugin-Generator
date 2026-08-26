@@ -17,6 +17,7 @@ from tools.PluginGenerator.gui import (
     build_command_handler,
     build_command_initializer,
     build_command_spec,
+    validate_command_actions,
     build_status_state,
     build_lifecycle_hooks,
     build_basic_layout_content,
@@ -24,6 +25,8 @@ from tools.PluginGenerator.gui import (
     build_item_field_spec,
     build_item_members,
     build_generation_summary,
+    build_computed_series_spec,
+    build_computed_series_blocks,
     build_session_notification_hooks,
     build_display_property,
     build_display_property_field,
@@ -31,9 +34,12 @@ from tools.PluginGenerator.gui import (
     build_dll_spec,
     list_deployed_plugins,
     plugin_cleanup_files,
+    remove_dll_specs,
     generate_plugin,
     load_preset,
     save_preset,
+    GRAPH_RENDERER_TEMPLATE,
+    GRAPH_SERIES_TEMPLATE,
 )
 from tools.PluginGenerator.generator import run
 
@@ -44,6 +50,28 @@ ICON = ROOT / 'icon.png'
 
 
 class ParameterAndPropertyTests(unittest.TestCase):
+    def test_graph_renderer_scaffold_uses_native_wpf_drawing(self):
+        renderer = GRAPH_RENDERER_TEMPLATE.format(namespace='DemoPlugin')
+        series = GRAPH_SERIES_TEMPLATE.format(namespace='DemoPlugin')
+
+        self.assertIn('DrawingContext drawingContext', renderer)
+        self.assertIn('drawingContext.DrawLine', renderer)
+        self.assertIn('double.IsNaN', renderer)
+        self.assertIn('IReadOnlyList<long> Timestamps', series)
+        self.assertIn('IReadOnlyList<double> Values', series)
+
+    def test_computed_series_supports_common_operations(self):
+        specs = [
+            build_computed_series_spec('Delta:difference'),
+            build_computed_series_spec('Mean:average'),
+            build_computed_series_spec('Ratio:ratio'),
+        ]
+        source = build_computed_series_blocks(specs)
+
+        self.assertIn('first.Values[index] - second.Values[index]', source)
+        self.assertIn('/ 2d', source)
+        self.assertIn('SafeRatio(', source)
+
     def test_deployed_plugin_discovery_excludes_built_in_plugins(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -80,6 +108,17 @@ class ParameterAndPropertyTests(unittest.TestCase):
             self.assertIn(str(Path(directory) / 'MyPlugin.deps.json'), cleanup)
             self.assertNotIn(str(Path(directory) / 'System.Reactive.dll'), cleanup)
 
+    def test_dll_specs_are_removed_by_path_not_tree_index(self):
+        specs = [
+            {'name': 'First.dll', 'path': r'C:\deps\First.dll'},
+            {'name': 'Second.dll', 'path': r'C:\deps\Second.dll'},
+            {'name': 'Third.dll', 'path': r'C:\deps\Third.dll'},
+        ]
+
+        remaining = remove_dll_specs(specs, [r'c:\DEPS\Second.dll'])
+
+        self.assertEqual(['First.dll', 'Third.dll'], [spec['name'] for spec in remaining])
+
     def test_generation_summary_lists_features_and_files(self):
         summary = build_generation_summary(
             'Demo',
@@ -95,12 +134,12 @@ class ParameterAndPropertyTests(unittest.TestCase):
             item_field_specs=[build_item_field_spec('Value:double')],
         )
 
-        self.assertIn('Plugin: DemoPlugin', summary)
+        self.assertIn('Plugin: DemoCustomPlugin', summary)
         self.assertIn('View: yes (table)', summary)
         self.assertIn('Display properties: 1', summary)
         self.assertIn('Commands: 1', summary)
         self.assertIn('lifecycle hooks', summary)
-        self.assertIn('DemoPlugin/ReadingViewModel.cs', summary)
+        self.assertIn('DemoCustomPlugin/ReadingViewModel.cs', summary)
 
     def test_preset_round_trip(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -167,7 +206,10 @@ class ParameterAndPropertyTests(unittest.TestCase):
         cases = [
             ('Title', 'string', 'Ready', 'private string _title = "Ready";'),
             ('Count', 'int', '12', 'private int _count = 12;'),
+            ('Total', 'long', '12000000000', 'private long _total = 12000000000L;'),
             ('Scale', 'double', '1.5', 'private double _scale = 1.5d;'),
+            ('Ratio', 'float', '1.25', 'private float _ratio = 1.25f;'),
+            ('Price', 'decimal', '19.95', 'private decimal _price = 19.95m;'),
             ('Enabled', 'bool', 'true', 'private bool _enabled = true;'),
         ]
         for name, property_type, default_value, expected in cases:
@@ -179,6 +221,35 @@ class ParameterAndPropertyTests(unittest.TestCase):
                 )
                 self.assertIn(expected, build_display_property_field(spec))
                 self.assertIn(f'public {property_type} {name}', build_display_property(spec))
+
+    def test_list_property_defaults_generate_typed_collections(self):
+        cases = [
+            ('Labels', 'List<string>', '["Front", "Rear"]', 'new List<string> { "Front", "Rear" }'),
+            ('Counts', 'List<int>', '[1, 2]', 'new List<int> { 1, 2 }'),
+            ('Values', 'List<double>', '[1.5, 2]', 'new List<double> { 1.5d, 2d }'),
+            ('Flags', 'List<bool>', '[true, false]', 'new List<bool> { true, false }'),
+        ]
+        for name, property_type, default_value, expected in cases:
+            with self.subTest(property_type=property_type):
+                spec = build_display_property_spec(
+                    name, property_type=property_type, default_value=default_value
+                )
+                self.assertIn(expected, build_display_property_field(spec))
+
+    def test_read_only_property_has_no_setter(self):
+        spec = build_display_property_spec(
+            'ComputedValue', property_type='double', default_value='0', read_only=True
+        )
+        source = build_display_property(spec)
+
+        self.assertIn('public double ComputedValue', source)
+        self.assertIn('get => this._computedValue;', source)
+        self.assertNotIn('set', source)
+        self.assertIn('Text="{Binding ComputedValue}"', build_property_control(spec))
+
+    def test_read_only_property_rejects_change_action(self):
+        with self.assertRaisesRegex(ValueError, 'read-only'):
+            build_display_property_spec('ComputedValue', read_only=True, change_action='refresh-all')
 
     def test_invalid_typed_defaults_are_rejected(self):
         invalid_defaults = [
@@ -214,6 +285,55 @@ class ParameterAndPropertyTests(unittest.TestCase):
 
         self.assertEqual('ExportData', spec['name'])
         self.assertEqual('Export Data', spec['button_label'])
+
+    def test_command_can_generate_logging_and_attached_debugger_break(self):
+        spec = build_command_spec('Recalculate', generate_log=True, break_when_attached=True)
+        source = build_command_handler(spec, 'this.logger')
+
+        self.assertIn('this.logger.Trace("Command Recalculate executed.");', source)
+        self.assertIn('if (Debugger.IsAttached)', source)
+        self.assertIn('Debugger.Break();', source)
+
+    def test_command_can_toggle_boolean_property(self):
+        properties = [build_display_property_spec('Enabled', property_type='bool')]
+        command = build_command_spec('ToggleEnabled', action='toggle', target_property='Enabled')
+
+        validate_command_actions([command], properties)
+        source = build_command_handler(command, display_properties=properties)
+
+        self.assertIn('this.Enabled = !this.Enabled;', source)
+        self.assertNotIn('TODO: Implement', source)
+
+    def test_commands_can_set_reset_increment_and_decrement_properties(self):
+        properties = [build_display_property_spec('Count', property_type='int', default_value='5')]
+        cases = [
+            ('SetCount', 'set', '12', 'this.Count = 12;'),
+            ('ResetCount', 'reset', '', 'this.Count = 5;'),
+            ('IncrementCount', 'increment', '', 'this.Count = this.Count + 1;'),
+            ('DecrementCount', 'decrement', '', 'this.Count = this.Count - 1;'),
+        ]
+        for name, action, value, expected in cases:
+            with self.subTest(action=action):
+                command = build_command_spec(
+                    name, action=action, target_property='Count', action_value=value
+                )
+                validate_command_actions([command], properties)
+                self.assertIn(expected, build_command_handler(command, display_properties=properties))
+
+    def test_automatic_command_actions_validate_property_compatibility(self):
+        text_property = build_display_property_spec('Title')
+        read_only_property = build_display_property_spec('Total', property_type='int', read_only=True)
+
+        with self.assertRaisesRegex(ValueError, 'Boolean'):
+            validate_command_actions(
+                [build_command_spec('ToggleTitle', action='toggle', target_property='Title')],
+                [text_property],
+            )
+        with self.assertRaisesRegex(ValueError, 'read-only'):
+            validate_command_actions(
+                [build_command_spec('IncrementTotal', action='increment', target_property='Total')],
+                [read_only_property],
+            )
 
     def test_command_button_escapes_xaml_text(self):
         spec = build_command_spec('Export', 'Save & Close')
@@ -308,6 +428,82 @@ class GenerationTests(unittest.TestCase):
             contents[cli_directory:cli_directory + 4] = (0x2000).to_bytes(4, 'little')
             contents[cli_directory + 4:cli_directory + 8] = (72).to_bytes(4, 'little')
         path.write_bytes(contents)
+
+    def test_every_behavior_generates_well_formed_xaml(self):
+        for behavior in (
+            BEHAVIOR_BASIC,
+            BEHAVIOR_CURRENT_VALUE,
+            BEHAVIOR_VISIBLE_RANGE,
+            BEHAVIOR_CURRENT_AND_RANGE,
+            BEHAVIOR_COMPARE_SESSIONS,
+        ):
+            with self.subTest(behavior=behavior):
+                options = {'behavior': behavior}
+                if behavior != BEHAVIOR_BASIC:
+                    options.update(
+                        library_project=str(LIBRARY_PROJECT),
+                        atlas_parameters=['vCar:Chassis'],
+                    )
+                target = self.generate(**options)
+                ET.parse(target / 'SeparationPlugin' / 'SeparationPluginView.xaml')
+
+    def test_basic_plugin_can_inject_logger(self):
+        target = self.generate(
+            include_parameters=False,
+            service_names=['ILogger'],
+        )
+        viewmodel = (
+            target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('using MAT.Atlas.Api.Core.Diagnostics;', viewmodel)
+        self.assertIn('ILogger logger', viewmodel)
+        self.assertIn('private readonly ILogger logger;', viewmodel)
+
+    def test_data_plugin_does_not_duplicate_builtin_logger_injection(self):
+        target = self.generate(
+            behavior=BEHAVIOR_CURRENT_VALUE,
+            library_project=str(LIBRARY_PROJECT),
+            service_names=['ILogger'],
+        )
+        viewmodel = (
+            target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs'
+        ).read_text(encoding='utf-8')
+
+        self.assertEqual(1, viewmodel.count('ILogger logger'))
+
+    def test_instrumented_basic_command_automatically_injects_logger(self):
+        target = self.generate(
+            include_parameters=False,
+            command_specs=[build_command_spec(
+                'Recalculate', generate_log=True, break_when_attached=True
+            )],
+        )
+        viewmodel = (
+            target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('using System.Diagnostics;', viewmodel)
+        self.assertIn('private readonly ILogger logger;', viewmodel)
+        self.assertIn('this.logger.Trace("Command Recalculate executed.");', viewmodel)
+        self.assertIn('Debugger.Break();', viewmodel)
+
+    def test_basic_plugin_generates_automatic_toggle_handler(self):
+        enabled = build_display_property_spec('Enabled', property_type='bool', default_value='false')
+        toggle = build_command_spec(
+            'ToggleEnabled', action='toggle', target_property='Enabled'
+        )
+        target = self.generate(
+            include_parameters=False,
+            display_property_specs=[enabled],
+            command_specs=[toggle],
+        )
+        viewmodel = (
+            target / 'SeparationPlugin' / 'SeparationPluginViewModel.cs'
+        ).read_text(encoding='utf-8')
+
+        self.assertIn('private void OnToggleEnabled()', viewmodel)
+        self.assertIn('this.Enabled = !this.Enabled;', viewmodel)
 
     def test_dll_dependencies_are_classified_copied_and_referenced(self):
         with tempfile.TemporaryDirectory() as dependency_directory:
@@ -454,6 +650,82 @@ class GenerationTests(unittest.TestCase):
 
         self.assertIn('ObservableCollection<ItemViewModel> Items', viewmodel)
         self.assertIn('DataGrid ItemsSource="{Binding Items}"', view)
+
+    def test_visible_range_plugin_can_generate_multi_series_time_graph(self):
+        target = self.generate(
+            behavior=BEHAVIOR_CURRENT_AND_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            atlas_parameters=['vCar:Chassis', 'rThrottlePedal:Chassis'],
+            graph_type='time-series',
+        )
+        project = target / 'SeparationPlugin'
+        view_path = project / 'SeparationPluginView.xaml'
+        view = view_path.read_text(encoding='utf-8')
+        codebehind = (project / 'SeparationPluginView.xaml.cs').read_text(encoding='utf-8')
+
+        self.assertTrue((project / 'GraphSeries.cs').exists())
+        self.assertTrue((project / 'GraphRenderer.cs').exists())
+        self.assertTrue((project / 'CustomGraphRenderer.cs').exists())
+        self.assertIn('VisualLayer x:Name="GraphVisualLayer"', view)
+        self.assertIn('ItemsSource="{Binding Series}"', view)
+        self.assertIn('new GraphSeries(', codebehind)
+        self.assertIn('item.Timestamps', codebehind)
+        self.assertIn('item.Values', codebehind)
+        self.assertIn('CursorVisualLayer', view)
+        self.assertIn('DrawCursor(', codebehind)
+        self.assertIn('Average:', view)
+        ET.parse(view_path)
+
+    def test_time_graph_requires_visible_range_behavior(self):
+        with self.assertRaisesRegex(ValueError, 'require a visible-range behavior'):
+            self.generate(include_parameters=False, graph_type='time-series')
+
+    def test_time_graph_can_generate_computed_series(self):
+        target = self.generate(
+            behavior=BEHAVIOR_VISIBLE_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            graph_type='time-series',
+            computed_series_specs=[build_computed_series_spec('Difference:difference')],
+        )
+        project = target / 'SeparationPlugin'
+        factory = (project / 'ComputedGraphSeriesFactory.cs').read_text(encoding='utf-8')
+        codebehind = (project / 'SeparationPluginView.xaml.cs').read_text(encoding='utf-8')
+
+        self.assertIn('"Difference"', factory)
+        self.assertIn('ComputedGraphSeriesFactory.Create', codebehind)
+
+    def test_graph_renderer_modes_generate_native_drawing_code(self):
+        expectations = {
+            'scatter': 'DrawScatter(',
+            'histogram': 'DrawHistogram(',
+            'bar': 'DrawBars(',
+        }
+        for graph_type, expected in expectations.items():
+            with self.subTest(graph_type=graph_type):
+                target = self.generate(
+                    behavior=BEHAVIOR_VISIBLE_RANGE,
+                    library_project=str(LIBRARY_PROJECT),
+                    graph_type=graph_type,
+                )
+                renderer = (
+                    target / 'SeparationPlugin' / 'GraphRenderer.cs'
+                ).read_text(encoding='utf-8')
+                self.assertIn(f'GraphType = "{graph_type}"', renderer)
+                self.assertIn(expected, renderer)
+
+    def test_custom_graph_generates_isolated_renderer_extension(self):
+        target = self.generate(
+            behavior=BEHAVIOR_VISIBLE_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            graph_type='custom',
+        )
+        project = target / 'SeparationPlugin'
+        custom = (project / 'CustomGraphRenderer.cs').read_text(encoding='utf-8')
+        renderer = (project / 'GraphRenderer.cs').read_text(encoding='utf-8')
+
+        self.assertIn('public sealed class CustomGraphRenderer', custom)
+        self.assertIn('TODO: Draw any custom visualization', custom)
+        self.assertIn('new CustomGraphRenderer().Draw', renderer)
 
     def test_collection_names_and_item_fields_are_configurable(self):
         target = self.generate(
