@@ -1,5 +1,7 @@
 ATLAS Display Plugin Generator
 
+For graph, cursor, signal, statistics, compare-session, rendering, and XAML troubleshooting, use the searchable [Graph and Data Debugging Manual](GRAPH_DEBUGGING_GUIDE.md). It includes stable diagnostic IDs, breakpoint chains, watch expressions, and a copyable debug report.
+
 Usage:
 
 Run the GUI generator with Python from the workspace root:
