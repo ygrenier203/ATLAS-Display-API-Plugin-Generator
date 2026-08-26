@@ -668,7 +668,7 @@ namespace {namespace}
         {{
             this.Timestamps = timestamps;
             this.Values = values;
-            var validValues = values.Where(value => !double.IsNaN(value)).ToArray();
+            var validValues = values.Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToArray();
             this.SampleCount = validValues.Length;
             this.Minimum = validValues.Length == 0 ? double.NaN : validValues.Min();
             this.Maximum = validValues.Length == 0 ? double.NaN : validValues.Max();
@@ -836,7 +836,10 @@ namespace {namespace}
                     parameterValues.Lock();
                     try
                     {{
-                        if (parameterValues.SampleCount > 0 && !double.IsNaN(parameterValues.Data[0]))
+                        if (parameterValues.SampleCount > 0 &&
+                            parameterValues.Data != null &&
+                            !double.IsNaN(parameterValues.Data[0]) &&
+                            !double.IsInfinity(parameterValues.Data[0]))
                         {{
                             updates.Add((result.Key, parameterValues.Data[0]));
                         }}
@@ -1217,7 +1220,9 @@ namespace {namespace}
             var count = Math.Min(series[0].Values.Count, series[1].Values.Count);
             var points = Enumerable.Range(0, count)
                 .Select(index => new {{ X = series[0].Values[index], Y = series[1].Values[index] }})
-                .Where(point => !double.IsNaN(point.X) && !double.IsNaN(point.Y)).ToList();
+                .Where(point =>
+                    !double.IsNaN(point.X) && !double.IsInfinity(point.X) &&
+                    !double.IsNaN(point.Y) && !double.IsInfinity(point.Y)).ToList();
             if (points.Count == 0) return;
             var minX = points.Min(point => point.X);
             var minY = points.Min(point => point.Y);
@@ -1257,7 +1262,9 @@ namespace {namespace}
 
         private void DrawBars(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
         {{
-            var averages = series.Select(item => item.Values.Where(value => !double.IsNaN(value)).DefaultIfEmpty().Average()).ToList();
+            var averages = series.Select(item => item.Values
+                .Where(value => !double.IsNaN(value) && !double.IsInfinity(value))
+                .DefaultIfEmpty().Average()).ToList();
             var maximum = Math.Max(double.Epsilon, averages.Select(Math.Abs).DefaultIfEmpty(1).Max());
             var width = extents.Width / Math.Max(1, averages.Count);
             for (var index = 0; index < averages.Count; index++)

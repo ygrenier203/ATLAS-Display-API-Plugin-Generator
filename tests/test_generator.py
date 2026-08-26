@@ -57,6 +57,7 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('DrawingContext drawingContext', renderer)
         self.assertIn('drawingContext.DrawLine', renderer)
         self.assertIn('double.IsNaN', renderer)
+        self.assertIn('double.IsInfinity', renderer)
         self.assertIn('var validSeries = series.Where(item => item.Timestamps.Count > 1)', renderer)
         self.assertIn('var start = validSeries.Min', renderer)
         self.assertIn('IReadOnlyList<long> Timestamps', series)
@@ -866,6 +867,7 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('ExecuteOnUiAsync', viewmodel)
         self.assertIn('IReadOnlyList<long> Timestamps', series)
         self.assertIn('IReadOnlyList<double> Values', series)
+        self.assertIn('!double.IsInfinity(value)', series)
         self.assertIn('ItemsSource="{Binding Series}"', view)
         self.assertFalse((project / 'ParameterViewModel.cs').exists())
 
@@ -910,6 +912,7 @@ class GenerationTests(unittest.TestCase):
 
         self.assertIn('Subscribe<CompositeSampleResultSignal>', viewmodel)
         self.assertIn('CreateCompositeSampleRequestSignal', viewmodel)
+        self.assertIn('parameterValues.Data != null', viewmodel)
         self.assertIn('DisplayParameterService.ParameterContainers', viewmodel)
         self.assertIn('parameterValues.Lock()', viewmodel)
         self.assertIn('parameterValues.Unlock()', viewmodel)
