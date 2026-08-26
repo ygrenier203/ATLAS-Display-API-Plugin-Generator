@@ -496,7 +496,7 @@ namespace {namespace}
                     parameter,
                     compositeSession.TimebaseRange,
                     this.DataRequestSampleCount,
-                    SampleMode.MaximumToMinimum);
+                    SampleMode.Mean);
 
                 this.SignalBus.Send(signal);
             }}
@@ -516,6 +516,11 @@ namespace {namespace}
                 parameterValues.Lock();
                 try
                 {{
+                    if (parameterValues.SampleCount == 0 || parameterValues.Data == null)
+                    {{
+                        return;
+                    }}
+
                     timestamps = parameterValues.Timestamp.ToArray();
                     values = parameterValues.Data.ToArray();
                 }}
