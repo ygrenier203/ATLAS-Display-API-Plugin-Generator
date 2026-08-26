@@ -713,7 +713,9 @@ CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(S
                 parameterValues.Lock();
                 try
                 {
-                    if (parameterValues.SampleCount == 0)
+                    if (parameterValues.SampleCount != 1 ||
+                        parameterValues.Data == null ||
+                        !parameterValues.DataStatus[0].HasFlag(DataStatusType.Sample))
                     {
                         return;
                     }
@@ -1149,13 +1151,19 @@ namespace {namespace}
 
         public void DrawCursor(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series, long? timestamp)
         {{
-            if (!timestamp.HasValue || series.Count == 0 || series[0].Timestamps.Count < 2)
+            if (!timestamp.HasValue || extents.Width <= 0 || extents.Height <= 0)
             {{
                 return;
             }}
 
-            var start = series.Min(item => item.Timestamps.First());
-            var end = series.Max(item => item.Timestamps.Last());
+            var validSeries = series.Where(item => item.Timestamps.Count > 1).ToList();
+            if (validSeries.Count == 0)
+            {{
+                return;
+            }}
+
+            var start = validSeries.Min(item => item.Timestamps.First());
+            var end = validSeries.Max(item => item.Timestamps.Last());
             if (timestamp.Value < start || timestamp.Value > end)
             {{
                 return;

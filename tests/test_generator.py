@@ -57,6 +57,8 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('DrawingContext drawingContext', renderer)
         self.assertIn('drawingContext.DrawLine', renderer)
         self.assertIn('double.IsNaN', renderer)
+        self.assertIn('var validSeries = series.Where(item => item.Timestamps.Count > 1)', renderer)
+        self.assertIn('var start = validSeries.Min', renderer)
         self.assertIn('IReadOnlyList<long> Timestamps', series)
         self.assertIn('IReadOnlyList<double> Values', series)
 
@@ -884,6 +886,8 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('parameterValues.Data == null', viewmodel)
         self.assertIn('CreateSampleRequestSignal', viewmodel)
         self.assertIn('CreateDataRequestSignal', viewmodel)
+        self.assertIn('parameterValues.SampleCount != 1', viewmodel)
+        self.assertIn('DataStatusType.Sample', viewmodel)
         self.assertIn('UpdateCurrentValue', series)
         self.assertIn('public double CurrentValue', series)
         self.assertIn('CurrentValue', view)
