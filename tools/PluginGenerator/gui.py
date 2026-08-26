@@ -45,7 +45,7 @@ def list_deployed_plugins(atlas_install_directory):
         for filename in os.listdir(root):
             lowered = filename.lower()
             is_plugin = lowered.endswith('plugin.dll') or os.path.normcase(root) == os.path.normcase(custom_root)
-            if not lowered.endswith('.dll') or not is_plugin or lowered.startswith('mat.atlas.plugins.'):
+            if not lowered.endswith('customplugin.dll') or not is_plugin or lowered.startswith('mat.atlas.plugins.'):
                 continue
             if lowered.startswith(('system.', 'microsoft.', 'newtonsoft.', 'autofac.')):
                 continue
