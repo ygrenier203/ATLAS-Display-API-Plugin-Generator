@@ -150,12 +150,12 @@ series.Values.Count
 
 Copy both arrays inside the lock. Never retain ATLAS-owned collections after unlocking. If custom transformations alter one array, they must alter the other consistently.
 
-### GRAPH-DATA-003: every value is `NaN`
+### GRAPH-DATA-003: every value is non-finite
 
-Statistics deliberately ignore `NaN`:
+Statistics deliberately ignore both `NaN` and positive/negative infinity, matching the renderer:
 
 ```csharp
-var validValues = values.Where(value => !double.IsNaN(value)).ToArray();
+var validValues = values.Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToArray();
 ```
 
 If every value is invalid, displayed sample count is zero and statistics remain `NaN`. Verify the exact parameter identifier, active session, visible range, and whether the session actually records that parameter there.
@@ -275,11 +275,11 @@ If `series` is null, `SyncSeries` may not have run, parameters may have changed 
 
 ### GRAPH-STATS-001: samples stay at zero
 
-The legend's `SampleCount` is the count of non-`NaN` values, not blindly the raw ATLAS count. Break in `TimebaseSeriesViewModel.Update` and inspect:
+The legend's `SampleCount` is the count of finite values, not blindly the raw ATLAS count. Break in `TimebaseSeriesViewModel.Update` and inspect:
 
 ```text
 values.Length
-values.Count(value => !double.IsNaN(value))
+values.Count(value => !double.IsNaN(value) && !double.IsInfinity(value))
 ```
 
 If `Update` never runs, work backward through GUID matching and signal handling. If valid values arrive but UI remains zero, inspect property notifications and bindings.
