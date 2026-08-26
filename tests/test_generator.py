@@ -582,6 +582,28 @@ class GenerationTests(unittest.TestCase):
         self.assertTrue(all(spec['include_button'] for spec in command_specs))
         save_settings.assert_called_once()
 
+    @patch('tools.PluginGenerator.gui.save_settings')
+    @patch('tools.PluginGenerator.gui.generate_plugin')
+    def test_cli_graph_presentation_is_forwarded_to_generation(self, generate, save_settings):
+        generate.return_value = Path('GeneratedPlugin')
+
+        run([
+            'SeparationPlugin',
+            '--behavior', 'visible-range',
+            '--output', str(ROOT),
+            '--library-project', str(LIBRARY_PROJECT),
+            '--icon', str(ICON),
+            '--graph', 'time-series',
+            '--graph-title', 'Speed traces',
+            '--graph-unit', 'km/h',
+            '--graph-unit', 'rpm',
+            '--no-graph-legend',
+        ])
+
+        self.assertEqual('Speed traces', generate.call_args.kwargs['graph_title'])
+        self.assertEqual(['km/h', 'rpm'], generate.call_args.kwargs['graph_units'])
+        self.assertFalse(generate.call_args.kwargs['show_graph_legend'])
+
     def test_atlas_parameter_is_registered_exactly(self):
         target = self.generate(
             include_parameters=True,
@@ -657,10 +679,14 @@ class GenerationTests(unittest.TestCase):
             library_project=str(LIBRARY_PROJECT),
             atlas_parameters=['vCar:Chassis', 'rThrottlePedal:Chassis'],
             graph_type='time-series',
+            graph_title='Speed & throttle',
+            graph_units=['km/h', '%'],
         )
         project = target / 'SeparationPlugin'
         view_path = project / 'SeparationPluginView.xaml'
         view = view_path.read_text(encoding='utf-8')
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+        series_viewmodel = (project / 'TimebaseSeriesViewModel.cs').read_text(encoding='utf-8')
         codebehind = (project / 'SeparationPluginView.xaml.cs').read_text(encoding='utf-8')
 
         self.assertTrue((project / 'GraphSeries.cs').exists())
@@ -674,6 +700,25 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('CursorVisualLayer', view)
         self.assertIn('DrawCursor(', codebehind)
         self.assertIn('Average:', view)
+        self.assertIn('Speed &amp; throttle', view)
+        self.assertIn("StringFormat='Units: {0}'", view)
+        self.assertIn('GraphUnits = { "km/h", "%" };', viewmodel)
+        self.assertIn('series.Unit = unit;', viewmodel)
+        self.assertIn('public string Unit', series_viewmodel)
+        ET.parse(view_path)
+
+    def test_time_graph_legend_can_be_hidden(self):
+        target = self.generate(
+            behavior=BEHAVIOR_VISIBLE_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            graph_type='time-series',
+            show_graph_legend=False,
+        )
+        view_path = target / 'SeparationPlugin' / 'SeparationPluginView.xaml'
+        view = view_path.read_text(encoding='utf-8')
+
+        self.assertIn('<ColumnDefinition Width="0" />', view)
+        self.assertIn('Visibility="Collapsed"', view)
         ET.parse(view_path)
 
     def test_time_graph_requires_visible_range_behavior(self):

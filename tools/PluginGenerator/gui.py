@@ -448,6 +448,7 @@ namespace {namespace}
     public sealed class {viewmodel_class} : TemplateDisplayViewModelBase
     {{
         private int dataRequestSampleCount;
+{graph_units_field}
 {status_state_fields}{display_property_fields}
         public {viewmodel_class}(
             ISignalBus signalBus,
@@ -546,18 +547,22 @@ namespace {namespace}
         {{
             var existing = this.Series.ToDictionary(item => item.ParameterIdentifier);
             this.Series.Clear();
-            foreach (var parameter in this.DisplayParameterService.PrimaryParameters)
+            for (var index = 0; index < this.DisplayParameterService.PrimaryParameters.Count; index++)
             {{
+                var parameter = this.DisplayParameterService.PrimaryParameters[index];
+                var unit = index < GraphUnits.Length ? GraphUnits[index] : string.Empty;
                 if (existing.TryGetValue(parameter.InstanceIdentifier, out var series))
                 {{
                     series.Name = parameter.Name;
+                    series.Unit = unit;
                     this.Series.Add(series);
                 }}
                 else
                 {{
                     this.Series.Add(new TimebaseSeriesViewModel(
                         parameter.InstanceIdentifier,
-                        parameter.Name));
+                        parameter.Name,
+                        unit));
                 }}
             }}
         }}
@@ -588,10 +593,11 @@ namespace {namespace}
         private IReadOnlyList<long> timestamps = Array.Empty<long>();
         private IReadOnlyList<double> values = Array.Empty<double>();
 
-        public TimebaseSeriesViewModel(Guid parameterIdentifier, string name)
+        public TimebaseSeriesViewModel(Guid parameterIdentifier, string name, string unit)
         {{
             this.ParameterIdentifier = parameterIdentifier;
             this.name = name;
+            this.unit = unit;
         }}
 
         [Browsable(false)]
@@ -601,6 +607,14 @@ namespace {namespace}
         {{
             get => this.name;
             set => this.SetProperty(ref this.name, value);
+        }}
+
+        private string unit;
+
+        public string Unit
+        {{
+            get => this.unit;
+            set => this.SetProperty(ref this.unit, value);
         }}
 
         public int SampleCount
@@ -1389,10 +1403,11 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
     <DockPanel>
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
 {command_buttons}        </StackPanel>
+{graph_title_block}
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="3*" />
-                <ColumnDefinition Width="240" />
+                <ColumnDefinition Width="{graph_legend_width}" />
             </Grid.ColumnDefinitions>
             <Border Margin="6" BorderBrush="DimGray" BorderThickness="1">
                 <Grid>
@@ -1400,13 +1415,15 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                     <displayPluginLibrary:VisualLayer x:Name="CursorVisualLayer" />
                 </Grid>
             </Border>
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
+                          Visibility="{graph_legend_visibility}">
                 <ItemsControl ItemsSource="{{Binding Series}}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
                             <Border BorderBrush="DimGray" BorderThickness="0,0,0,1" Padding="8">
                                 <StackPanel>
                                     <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
+                                    <TextBlock Text="{{Binding Unit, StringFormat='Units: {{0}}'}}" Foreground="LightGray" />
 {current_value_text}
                                     <TextBlock Text="{{Binding Minimum, StringFormat='Minimum: {{0:F3}}'}}" Foreground="White" />
                                     <TextBlock Text="{{Binding Maximum, StringFormat='Maximum: {{0:F3}}'}}" Foreground="White" />
@@ -2419,7 +2436,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     include_status_state=False, include_lifecycle_hooks=False,
                     include_session_notifications=False, include_item_collection=False,
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
-                    item_field_specs=None, graph_type='none', computed_series_specs=None, dll_specs=None, atlas_install_directory=None):
+                    item_field_specs=None, graph_type='none', computed_series_specs=None, graph_title='',
+                    graph_units=None, show_graph_legend=True, dll_specs=None, atlas_install_directory=None):
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
@@ -2435,6 +2453,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     display_property_specs = list(display_property_specs or [])
     command_specs = list(command_specs or [])
     computed_series_specs = list(computed_series_specs or [])
+    graph_title = str(graph_title or '').strip()
+    graph_units = [str(unit).strip() for unit in (graph_units or [])]
     dll_specs = normalize_dll_specs(dll_specs)
     validate_display_property_actions(display_property_specs, behavior)
     validate_command_actions(command_specs, display_property_specs)
@@ -2657,6 +2677,12 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             status_state_properties=status_state_properties,
             session_notification_hooks=session_notification_hooks,
             item_collection_property=item_collection_property,
+            graph_units_field=(
+                '        private static readonly string[] GraphUnits = { '
+                + ', '.join(f'"{escape_csharp_string(unit)}"' for unit in graph_units)
+                + ' };'
+                if behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE) else ''
+            ),
         ),
     }
     if behavior == BEHAVIOR_CURRENT_VALUE:
@@ -2697,6 +2723,13 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             view_class=f'{name}View',
             current_value_text=(CURRENT_VALUE_TEXT if behavior == BEHAVIOR_CURRENT_AND_RANGE else ''),
             command_buttons=command_buttons,
+            graph_title_block=(
+                f'        <TextBlock DockPanel.Dock="Top" Text="{html.escape(graph_title, quote=True)}" '
+                'FontSize="20" FontWeight="Bold" Foreground="White" Margin="10,6" />'
+                if graph_title and graph_type != 'none' else ''
+            ),
+            graph_legend_width='240' if show_graph_legend else '0',
+            graph_legend_visibility='Visible' if show_graph_legend else 'Collapsed',
             basic_content=build_basic_layout_content(
                 basic_layout,
                 f'{name}View',
@@ -3084,10 +3117,27 @@ class PluginGeneratorApp(tk.Tk):
             width=22,
         )
         self.graph_type_combo.grid(row=10, column=1, sticky='w', padx=8)
+        self.graph_type_combo.bind('<<ComboboxSelected>>', lambda event: self.update_graph_states())
         tk.Label(advanced_frame, text='Computed series (Name:operation):').grid(row=11, column=0, sticky='w', pady=4)
         self.computed_series_var = tk.StringVar(value='')
         self.computed_series_entry = tk.Entry(advanced_frame, textvariable=self.computed_series_var, width=36)
         self.computed_series_entry.grid(row=11, column=1, sticky='ew', padx=8)
+        tk.Label(advanced_frame, text='Graph title:').grid(row=12, column=0, sticky='w', pady=4)
+        self.graph_title_var = tk.StringVar(value='')
+        self.graph_title_entry = tk.Entry(advanced_frame, textvariable=self.graph_title_var, width=36)
+        self.graph_title_entry.grid(row=12, column=1, sticky='ew', padx=8)
+        tk.Label(advanced_frame, text='Series units (comma separated):').grid(row=13, column=0, sticky='w', pady=4)
+        self.graph_units_var = tk.StringVar(value='')
+        self.graph_units_entry = tk.Entry(advanced_frame, textvariable=self.graph_units_var, width=36)
+        self.graph_units_entry.grid(row=13, column=1, sticky='ew', padx=8)
+        self.graph_legend_var = tk.BooleanVar(value=True)
+        self.graph_legend_checkbutton = tk.Checkbutton(
+            advanced_frame,
+            text='Show graph legend and statistics',
+            variable=self.graph_legend_var,
+        )
+        self.graph_legend_checkbutton.grid(row=14, column=0, columnspan=2, sticky='w', pady=4)
+        self.update_graph_states()
         
         # === Action Buttons ===
         button_frame = tk.Frame(scrollable_frame)
@@ -3677,6 +3727,10 @@ class PluginGeneratorApp(tk.Tk):
         self.item_fields_var.set('Name:string')
         self.graph_type_var.set('none')
         self.computed_series_var.set('')
+        self.graph_title_var.set('')
+        self.graph_units_var.set('')
+        self.graph_legend_var.set(True)
+        self.update_graph_states()
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
     def update_behavior_states(self):
@@ -3709,6 +3763,16 @@ class PluginGeneratorApp(tk.Tk):
             self.graph_type_combo.config(state='readonly' if graph_enabled else 'disabled')
             if not graph_enabled:
                 self.graph_type_var.set('none')
+            self.update_graph_states()
+
+    def update_graph_states(self):
+        if not hasattr(self, 'graph_title_entry'):
+            return
+        state = tk.NORMAL if self.graph_type_var.get() != 'none' else tk.DISABLED
+        self.graph_title_entry.config(state=state)
+        self.graph_units_entry.config(state=state)
+        self.computed_series_entry.config(state=state)
+        self.graph_legend_checkbutton.config(state=state)
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output, library, icon, and ATLAS paths?'):
@@ -3740,6 +3804,9 @@ class PluginGeneratorApp(tk.Tk):
             'item_fields': self.item_fields_var.get(),
             'graph_type': self.graph_type_var.get(),
             'computed_series': self.computed_series_var.get(),
+            'graph_title': self.graph_title_var.get(),
+            'graph_units': self.graph_units_var.get(),
+            'show_graph_legend': self.graph_legend_var.get(),
         }
 
     def apply_preset_configuration(self, configuration):
@@ -3768,6 +3835,9 @@ class PluginGeneratorApp(tk.Tk):
         self.item_fields_var.set(configuration.get('item_fields', 'Name:string'))
         self.graph_type_var.set(configuration.get('graph_type', 'none'))
         self.computed_series_var.set(configuration.get('computed_series', ''))
+        self.graph_title_var.set(configuration.get('graph_title', ''))
+        self.graph_units_var.set(configuration.get('graph_units', ''))
+        self.graph_legend_var.set(configuration.get('show_graph_legend', True))
         self.update_behavior_states()
 
     def save_preset_dialog(self):
@@ -3828,6 +3898,8 @@ class PluginGeneratorApp(tk.Tk):
                 for value in self.computed_series_var.get().split(',')
                 if value.strip()
             ]
+            graph_units_text = self.graph_units_var.get().strip()
+            graph_units = [unit.strip() for unit in graph_units_text.split(',')] if graph_units_text else []
             if atlas_parameters and not include_parameters:
                 raise ValueError('ATLAS parameters require Current value or Visible range behavior.')
             service_names = [name for name, var in self.service_vars.items() if var.get()]
@@ -3872,6 +3944,9 @@ class PluginGeneratorApp(tk.Tk):
                 item_field_specs=item_field_specs,
                 graph_type=self.graph_type_var.get(),
                 computed_series_specs=computed_series_specs,
+                graph_title=self.graph_title_var.get(),
+                graph_units=graph_units,
+                show_graph_legend=self.graph_legend_var.get(),
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,
