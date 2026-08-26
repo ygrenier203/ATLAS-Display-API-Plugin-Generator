@@ -10,7 +10,6 @@ def run(args=None):
 	parser.add_argument('--icon', help='path to the plugin PNG icon; required until configured')
 	parser.add_argument('--dll', action='append', default=[], help='managed or native DLL dependency; repeat as needed')
 	parser.add_argument('--atlas-install', help='ATLAS installation directory used for debugging and deployment')
-	parser.add_argument('--no-view', action='store_true', help='omit the WPF view files')
 	parser.add_argument(
 		'--behavior',
 		choices=('current-value', 'visible-range', 'current-and-range', 'compare-sessions', 'basic'),
@@ -131,7 +130,7 @@ def run(args=None):
 	target = generate_plugin(
 		options.name,
 		output,
-		include_view=not options.no_view,
+		include_view=True,
 		include_parameters=include_parameters,
 		behavior=behavior,
 		atlas_parameters=options.atlas_parameter,

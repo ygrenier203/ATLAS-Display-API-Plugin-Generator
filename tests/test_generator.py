@@ -727,6 +727,10 @@ class GenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'require a visible-range behavior'):
             self.generate(include_parameters=False, graph_type='time-series')
 
+    def test_viewless_plugin_is_rejected_instead_of_generating_missing_view_type(self):
+        with self.assertRaisesRegex(ValueError, 'require a WPF view'):
+            self.generate(include_view=False)
+
     def test_time_graph_can_generate_computed_series(self):
         target = self.generate(
             behavior=BEHAVIOR_VISIBLE_RANGE,

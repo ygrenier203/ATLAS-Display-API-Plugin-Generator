@@ -2446,6 +2446,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
                     item_field_specs=None, graph_type='none', computed_series_specs=None, graph_title='',
                     graph_units=None, show_graph_legend=True, dll_specs=None, atlas_install_directory=None):
+    if not include_view:
+        raise ValueError('Generated display plugins require a WPF view.')
     name = normalize_plugin_name(name)
     behavior = behavior or (BEHAVIOR_CURRENT_VALUE if include_parameters else BEHAVIOR_BASIC)
     include_parameters = behavior_uses_parameters(behavior)
