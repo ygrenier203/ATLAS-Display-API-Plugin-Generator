@@ -1118,8 +1118,8 @@ namespace {namespace}
 {{
     public sealed class GraphRenderer
     {{
-        private const string GraphType = "__GRAPH_TYPE__";
-        private const bool OverlayCursorBars = __CURSOR_BAR_OVERLAY__;
+        private static readonly string GraphType = "__GRAPH_TYPE__";
+        private static readonly bool OverlayCursorBars = __CURSOR_BAR_OVERLAY__;
 
         public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series,
             long? viewportStart = null, long? viewportEnd = null)
@@ -2408,7 +2408,7 @@ namespace {namespace}
 {{
     public partial class {view_class} : UserControl
     {{
-        private const bool UsesTimeAxis = {uses_time_axis};
+        private static readonly bool UsesTimeAxis = {uses_time_axis};
         private static readonly Color[] Palette =
         {{
             Colors.DeepSkyBlue, Colors.Orange, Colors.LimeGreen, Colors.Magenta,

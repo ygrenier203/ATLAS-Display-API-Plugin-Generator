@@ -720,7 +720,7 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('MouseLeftButtonDown', codebehind)
         self.assertIn('MouseWheel', codebehind)
         self.assertIn('ModifierKeys.Shift', codebehind)
-        self.assertIn('private const bool UsesTimeAxis = true;', codebehind)
+        self.assertIn('private static readonly bool UsesTimeAxis = true;', codebehind)
         self.assertIn('this.viewportStart', codebehind)
         self.assertIn('public string Unit', series_viewmodel)
         ET.parse(view_path)
@@ -756,7 +756,7 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('DrawCursorHistogram', renderer)
         self.assertIn('item.CurrentValue', renderer)
         self.assertIn('item.CurrentValue', codebehind)
-        self.assertIn('private const bool UsesTimeAxis = false;', codebehind)
+        self.assertIn('private static readonly bool UsesTimeAxis = false;', codebehind)
 
     def test_cursor_histogram_requires_cursor_and_range_behavior(self):
         with self.assertRaisesRegex(ValueError, r'Current value \+ visible range'):
