@@ -89,7 +89,9 @@ Graph generation uses reusable native WPF `DrawingContext` templates derived fro
 
 Visible-range and combined cursor/range plugins can select the `time-series` graph. It draws every configured ATLAS parameter as a separate colored trace and places live minimum, maximum, sample count, and optional cursor values in a side panel. The GUI can add a graph title, assign comma-separated units in parameter order, and hide the legend/statistics panel. From the CLI, use `--graph time-series`, `--graph-title`, repeat `--graph-unit` in parameter order, and optionally add `--no-graph-legend`.
 
-Generated time graphs include a grid, automatic per-series scaling, a color legend through the statistics cards, minimum/maximum/average/sample-count statistics, and a cursor overlay for combined cursor/range plugins.
+Generated time graphs include a grid, a shared visible Y scale, a color legend through the statistics cards, minimum/maximum/average/sample-count statistics, and a cursor overlay for combined cursor/range plugins.
+
+Standard graphs render numeric axis scales; time-series X axes use ATLAS timestamps formatted as time of day. Time-series traces share one visible Y scale so overlaid values are quantitatively comparable. In a generated time-series graph, left-click or left-drag moves the real ATLAS cursor, the mouse wheel zooms around the pointer, and Shift+mouse-wheel pans within the samples loaded for the current ATLAS time range. Changing the time range in ATLAS resets the graph viewport to that new range.
 
 Computed traces can combine the first two raw graph series using `difference`, `sum`, `average`, or safe `ratio` operations. Enter comma-separated `Name:operation` values in the GUI or repeat `--computed-series`, for example `--computed-series Delta:difference`.
 

@@ -1109,6 +1109,7 @@ namespace {namespace}
 
 GRAPH_RENDERER_TEMPLATE = '''using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Media;
@@ -1176,10 +1177,25 @@ namespace {namespace}
             var start = viewportStart ?? validSeries.Min(item => item.Timestamps.First());
             var end = viewportEnd ?? validSeries.Max(item => item.Timestamps.Last());
             var timeRange = Math.Max(1, end - start);
+            var visibleValues = validSeries.SelectMany(item => Enumerable.Range(
+                    0, Math.Min(item.Timestamps.Count, item.Values.Count))
+                .Where(index => item.Timestamps[index] >= start && item.Timestamps[index] <= end)
+                .Select(index => item.Values[index]))
+                .Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToList();
+            if (visibleValues.Count == 0)
+            {{
+                return;
+            }}
+
+            var minimum = visibleValues.Min();
+            var maximum = visibleValues.Max();
+            var valueRange = Math.Max(double.Epsilon, maximum - minimum);
             foreach (var item in validSeries)
             {{
-                this.DrawSeries(drawingContext, extents, item, start, timeRange);
+                this.DrawSeries(drawingContext, extents, item, start, timeRange, minimum, valueRange);
             }}
+
+            this.DrawTimeAxes(drawingContext, extents, start, end, minimum, maximum);
         }}
 
         public void DrawCursor(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series,
@@ -1207,17 +1223,10 @@ namespace {namespace}
             drawingContext.DrawLine(new Pen(Brushes.White, 1), new Point(x, 0), new Point(x, extents.Height));
         }}
 
-        private void DrawSeries(DrawingContext drawingContext, Size extents, GraphSeries series, long start, long timeRange)
+        private void DrawSeries(DrawingContext drawingContext, Size extents, GraphSeries series,
+            long start, long timeRange, double minimum, double valueRange)
         {{
             var count = Math.Min(series.Timestamps.Count, series.Values.Count);
-            var finiteValues = series.Values.Take(count).Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToList();
-            if (finiteValues.Count < 2)
-            {{
-                return;
-            }}
-
-            var minimum = finiteValues.Min();
-            var valueRange = Math.Max(double.Epsilon, finiteValues.Max() - minimum);
             var pen = new Pen(new SolidColorBrush(series.Color), 1.5);
             Point? previous = null;
             for (var index = 0; index < count; index++)
@@ -1259,14 +1268,18 @@ namespace {namespace}
             if (points.Count == 0) return;
             var minX = points.Min(point => point.X);
             var minY = points.Min(point => point.Y);
-            var rangeX = Math.Max(double.Epsilon, points.Max(point => point.X) - minX);
-            var rangeY = Math.Max(double.Epsilon, points.Max(point => point.Y) - minY);
+            var maxX = points.Max(point => point.X);
+            var maxY = points.Max(point => point.Y);
+            var rangeX = Math.Max(double.Epsilon, maxX - minX);
+            var rangeY = Math.Max(double.Epsilon, maxY - minY);
             foreach (var point in points)
             {{
                 var x = ((point.X - minX) / rangeX) * extents.Width;
                 var y = extents.Height - (((point.Y - minY) / rangeY) * extents.Height);
                 drawingContext.DrawEllipse(Brushes.DeepSkyBlue, null, new Point(x, y), 2, 2);
             }}
+
+            this.DrawNumericAxes(drawingContext, extents, minX, maxX, minY, maxY);
         }}
 
         private void DrawHistogram(DrawingContext drawingContext, Size extents, GraphSeries series)
@@ -1291,6 +1304,8 @@ namespace {namespace}
                 drawingContext.DrawRectangle(Brushes.DeepSkyBlue, null,
                     new Rect(index * width, extents.Height - height, Math.Max(1, width - 1), height));
             }}
+
+            this.DrawNumericAxes(drawingContext, extents, minimum, values.Max(), 0d, maximumCount);
         }}
 
         private void DrawBars(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
@@ -1298,14 +1313,21 @@ namespace {namespace}
             var averages = series.Select(item => item.Values
                 .Where(value => !double.IsNaN(value) && !double.IsInfinity(value))
                 .DefaultIfEmpty().Average()).ToList();
-            var maximum = Math.Max(double.Epsilon, averages.Select(Math.Abs).DefaultIfEmpty(1).Max());
+            var minimum = Math.Min(0d, averages.Min());
+            var maximum = Math.Max(0d, averages.Max());
+            var range = Math.Max(double.Epsilon, maximum - minimum);
+            var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
             var width = extents.Width / Math.Max(1, averages.Count);
             for (var index = 0; index < averages.Count; index++)
             {{
-                var height = (Math.Abs(averages[index]) / maximum) * extents.Height;
+                var valueY = extents.Height - (((averages[index] - minimum) / range) * extents.Height);
                 drawingContext.DrawRectangle(new SolidColorBrush(series[index].Color), null,
-                    new Rect(index * width, extents.Height - height, Math.Max(1, width - 4), height));
+                    new Rect(index * width, Math.Min(zeroY, valueY), Math.Max(1, width - 4),
+                        Math.Max(1d, Math.Abs(zeroY - valueY))));
             }}
+
+            this.DrawValueAndCategoryAxes(drawingContext, extents, minimum, maximum,
+                series.Select(item => item.Name).ToList(), false);
         }}
 
         private void DrawCursorHistogram(DrawingContext drawingContext, Size extents,
@@ -1336,7 +1358,97 @@ namespace {namespace}
                 drawingContext.DrawRectangle(new SolidColorBrush(color), null,
                     new Rect(x, Math.Min(zeroY, valueY), barWidth, Math.Max(1d, Math.Abs(zeroY - valueY))));
             }}
+
+            this.DrawValueAndCategoryAxes(drawingContext, extents, minimum, maximum,
+                current.Select(item => item.Name).ToList(), OverlayCursorBars);
         }}
+
+        private void DrawTimeAxes(DrawingContext drawingContext, Size extents,
+            long start, long end, double minimum, double maximum)
+        {{
+            for (var tick = 0; tick <= 5; tick++)
+            {{
+                var fraction = tick / 5d;
+                var timestamp = start + (long)((end - start) * fraction);
+                var time = TimeSpan.FromTicks(timestamp / 100);
+                this.DrawTickLabel(drawingContext,
+                    time.ToString(@"hh\\:mm\\:ss\\.fff", CultureInfo.InvariantCulture),
+                    new Point(extents.Width * fraction, extents.Height), true, extents);
+                var value = maximum - ((maximum - minimum) * fraction);
+                this.DrawTickLabel(drawingContext, FormatNumber(value),
+                    new Point(0, extents.Height * fraction), false, extents);
+            }}
+        }}
+
+        private void DrawNumericAxes(DrawingContext drawingContext, Size extents,
+            double minimumX, double maximumX, double minimumY, double maximumY)
+        {{
+            for (var tick = 0; tick <= 5; tick++)
+            {{
+                var fraction = tick / 5d;
+                this.DrawTickLabel(drawingContext,
+                    FormatNumber(minimumX + ((maximumX - minimumX) * fraction)),
+                    new Point(extents.Width * fraction, extents.Height), true, extents);
+                this.DrawTickLabel(drawingContext,
+                    FormatNumber(maximumY - ((maximumY - minimumY) * fraction)),
+                    new Point(0, extents.Height * fraction), false, extents);
+            }}
+        }}
+
+        private void DrawValueAndCategoryAxes(DrawingContext drawingContext, Size extents,
+            double minimum, double maximum, IReadOnlyList<string> categories, bool overlaid)
+        {{
+            for (var tick = 0; tick <= 5; tick++)
+            {{
+                var fraction = tick / 5d;
+                this.DrawTickLabel(drawingContext,
+                    FormatNumber(maximum - ((maximum - minimum) * fraction)),
+                    new Point(0, extents.Height * fraction), false, extents);
+            }}
+
+            if (overlaid)
+            {{
+                this.DrawTickLabel(drawingContext, "Overlaid parameters",
+                    new Point(extents.Width / 2d, extents.Height), true, extents);
+                return;
+            }}
+
+            var slotWidth = extents.Width / Math.Max(1, categories.Count);
+            var step = Math.Max(1, (int)Math.Ceiling(42d / Math.Max(1d, slotWidth)));
+            for (var index = 0; index < categories.Count; index += step)
+            {{
+                var label = categories[index].Length > 12
+                    ? categories[index].Substring(0, 12) + "…"
+                    : categories[index];
+                this.DrawTickLabel(drawingContext, label,
+                    new Point((index + 0.5d) * slotWidth, extents.Height), true, extents);
+            }}
+        }}
+
+        private void DrawTickLabel(DrawingContext drawingContext, string text, Point anchor,
+            bool horizontal, Size extents)
+        {{
+            var formatted = new FormattedText(
+                text,
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                new Typeface("Segoe UI"),
+                10d,
+                Brushes.White,
+                1d);
+            var x = horizontal
+                ? Math.Max(2d, Math.Min(extents.Width - formatted.Width - 2d,
+                    anchor.X - (formatted.Width / 2d)))
+                : 3d;
+            var y = horizontal
+                ? Math.Max(0d, anchor.Y - formatted.Height - 2d)
+                : Math.Max(0d, Math.Min(extents.Height - formatted.Height,
+                    anchor.Y - (formatted.Height / 2d)));
+            drawingContext.DrawText(formatted, new Point(x, y));
+        }}
+
+        private static string FormatNumber(double value) =>
+            value.ToString("G5", CultureInfo.InvariantCulture);
 
     }}
 }}
