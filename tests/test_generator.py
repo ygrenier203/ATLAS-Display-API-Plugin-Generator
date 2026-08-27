@@ -62,6 +62,7 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('viewportStart ?? validSeries.Min', renderer)
         self.assertIn('IReadOnlyList<long> Timestamps', series)
         self.assertIn('IReadOnlyList<double> Values', series)
+        self.assertIn('double CurrentValue', series)
 
     def test_computed_series_supports_common_operations(self):
         specs = [
@@ -731,6 +732,42 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('<ColumnDefinition Width="0" />', view)
         self.assertIn('Visibility="Collapsed"', view)
         ET.parse(view_path)
+
+    def test_cursor_histogram_uses_parameter_cursor_values_and_optional_overlay(self):
+        target = self.generate(
+            behavior=BEHAVIOR_CURRENT_AND_RANGE,
+            library_project=str(LIBRARY_PROJECT),
+            atlas_parameters=['vCar:Chassis', 'nEngine:Chassis'],
+            graph_type='cursor-histogram',
+            overlay_cursor_bars=True,
+        )
+        project = target / 'SeparationPlugin'
+        renderer = (project / 'GraphRenderer.cs').read_text(encoding='utf-8')
+        codebehind = (project / 'SeparationPluginView.xaml.cs').read_text(encoding='utf-8')
+
+        self.assertIn('GraphType = "cursor-histogram"', renderer)
+        self.assertIn('OverlayCursorBars = true', renderer)
+        self.assertIn('DrawCursorHistogram', renderer)
+        self.assertIn('item.CurrentValue', renderer)
+        self.assertIn('item.CurrentValue', codebehind)
+        self.assertIn('private const bool UsesTimeAxis = false;', codebehind)
+
+    def test_cursor_histogram_requires_cursor_and_range_behavior(self):
+        with self.assertRaisesRegex(ValueError, r'Current value \+ visible range'):
+            self.generate(
+                behavior=BEHAVIOR_VISIBLE_RANGE,
+                library_project=str(LIBRARY_PROJECT),
+                graph_type='cursor-histogram',
+            )
+
+    def test_cursor_bar_overlay_requires_cursor_histogram(self):
+        with self.assertRaisesRegex(ValueError, 'requires a cursor histogram'):
+            self.generate(
+                behavior=BEHAVIOR_CURRENT_AND_RANGE,
+                library_project=str(LIBRARY_PROJECT),
+                graph_type='time-series',
+                overlay_cursor_bars=True,
+            )
 
     def test_time_graph_requires_visible_range_behavior(self):
         with self.assertRaisesRegex(ValueError, 'require a visible-range behavior'):

@@ -1084,12 +1084,14 @@ namespace {namespace}
 {{
     public sealed class GraphSeries
     {{
-        public GraphSeries(string name, IReadOnlyList<long> timestamps, IReadOnlyList<double> values, Color color)
+        public GraphSeries(string name, IReadOnlyList<long> timestamps, IReadOnlyList<double> values, Color color,
+            double currentValue = double.NaN)
         {{
             this.Name = name;
             this.Timestamps = timestamps;
             this.Values = values;
             this.Color = color;
+            this.CurrentValue = currentValue;
         }}
 
         public string Name {{ get; }}
@@ -1099,6 +1101,8 @@ namespace {namespace}
         public IReadOnlyList<double> Values {{ get; }}
 
         public Color Color {{ get; }}
+
+        public double CurrentValue {{ get; }}
     }}
 }}
 '''
@@ -1114,6 +1118,7 @@ namespace {namespace}
     public sealed class GraphRenderer
     {{
         private const string GraphType = "__GRAPH_TYPE__";
+        private const bool OverlayCursorBars = __CURSOR_BAR_OVERLAY__;
 
         public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series,
             long? viewportStart = null, long? viewportEnd = null)
@@ -1129,6 +1134,12 @@ namespace {namespace}
             }}
             if (extents.Width <= 0 || extents.Height <= 0)
             {{
+                return;
+            }}
+
+            if (GraphType == "cursor-histogram")
+            {{
+                this.DrawCursorHistogram(drawingContext, extents, series);
                 return;
             }}
 
@@ -1174,7 +1185,7 @@ namespace {namespace}
         public void DrawCursor(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series,
             long? timestamp, long? viewportStart = null, long? viewportEnd = null)
         {{
-            if (!timestamp.HasValue || extents.Width <= 0 || extents.Height <= 0)
+            if (GraphType != "time-series" || !timestamp.HasValue || extents.Width <= 0 || extents.Height <= 0)
             {{
                 return;
             }}
@@ -1294,6 +1305,36 @@ namespace {namespace}
                 var height = (Math.Abs(averages[index]) / maximum) * extents.Height;
                 drawingContext.DrawRectangle(new SolidColorBrush(series[index].Color), null,
                     new Rect(index * width, extents.Height - height, Math.Max(1, width - 4), height));
+            }}
+        }}
+
+        private void DrawCursorHistogram(DrawingContext drawingContext, Size extents,
+            IReadOnlyList<GraphSeries> series)
+        {{
+            var current = series.Where(item =>
+                !double.IsNaN(item.CurrentValue) && !double.IsInfinity(item.CurrentValue)).ToList();
+            if (current.Count == 0)
+            {{
+                return;
+            }}
+
+            var minimum = Math.Min(0d, current.Min(item => item.CurrentValue));
+            var maximum = Math.Max(0d, current.Max(item => item.CurrentValue));
+            var range = Math.Max(double.Epsilon, maximum - minimum);
+            var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
+            var slotWidth = OverlayCursorBars ? extents.Width : extents.Width / current.Count;
+            for (var index = 0; index < current.Count; index++)
+            {{
+                var item = current[index];
+                var valueY = extents.Height - (((item.CurrentValue - minimum) / range) * extents.Height);
+                var barWidth = Math.Max(2d, slotWidth * (OverlayCursorBars ? 0.6d : 0.75d));
+                var x = OverlayCursorBars
+                    ? (extents.Width - barWidth) / 2d
+                    : (index * slotWidth) + ((slotWidth - barWidth) / 2d);
+                var color = Color.FromArgb(OverlayCursorBars ? (byte)150 : (byte)230,
+                    item.Color.R, item.Color.G, item.Color.B);
+                drawingContext.DrawRectangle(new SolidColorBrush(color), null,
+                    new Rect(x, Math.Min(zeroY, valueY), barWidth, Math.Max(1d, Math.Abs(zeroY - valueY))));
             }}
         }}
 
@@ -2344,7 +2385,7 @@ namespace {namespace}
                 item.Name,
                 item.Timestamps,
                 item.Values,
-                Palette[index % Palette.Length])).ToList() ?? new List<GraphSeries>();
+                Palette[index % Palette.Length]{current_value_argument})).ToList() ?? new List<GraphSeries>();
             this.UpdateLoadedRange(series);
 {computed_series_update}
             visual.Draw(context => this.graphRenderer.Draw(
@@ -2605,7 +2646,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     include_session_notifications=False, include_item_collection=False,
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
                     item_field_specs=None, graph_type='none', computed_series_specs=None, graph_title='',
-                    graph_units=None, show_graph_legend=True, dll_specs=None, atlas_install_directory=None):
+                    graph_units=None, show_graph_legend=True, overlay_cursor_bars=False,
+                    dll_specs=None, atlas_install_directory=None):
     if not include_view:
         raise ValueError('Generated display plugins require a WPF view.')
     name = normalize_plugin_name(name)
@@ -2636,10 +2678,14 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError(f'Unknown basic view layout: {basic_layout}')
     if behavior != BEHAVIOR_BASIC and basic_layout != 'text':
         raise ValueError('View layout selection is only available for basic displays.')
-    if graph_type not in ('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'):
+    if graph_type not in ('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'bar', 'custom'):
         raise ValueError(f'Unknown graph type: {graph_type}')
     if graph_type != 'none' and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         raise ValueError('Time-series graphs require a visible-range behavior.')
+    if graph_type == 'cursor-histogram' and behavior != BEHAVIOR_CURRENT_AND_RANGE:
+        raise ValueError('Cursor histograms require Current value + visible range behavior.')
+    if overlay_cursor_bars and graph_type != 'cursor-histogram':
+        raise ValueError('Cursor bar overlay requires a cursor histogram.')
     if computed_series_specs and graph_type == 'none':
         raise ValueError('Computed series require a graph.')
     if include_item_collection and basic_layout == 'text':
@@ -2872,7 +2918,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             files['GraphSeries.cs'] = GRAPH_SERIES_TEMPLATE.format(namespace=namespace)
             files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace).replace(
                 '__GRAPH_TYPE__', graph_type
-            )
+            ).replace('__CURSOR_BAR_OVERLAY__', 'true' if overlay_cursor_bars else 'false')
             files['CustomGraphRenderer.cs'] = CUSTOM_GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
             if computed_series_specs:
                 files['ComputedGraphSeriesFactory.cs'] = COMPUTED_GRAPH_SERIES_TEMPLATE.format(
@@ -2918,6 +2964,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             view_class=f'{name}View',
             viewmodel_class=f'{name}ViewModel',
             uses_time_axis='true' if graph_type == 'time-series' else 'false',
+            current_value_argument=', item.CurrentValue' if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
             computed_series_update=(
                 '            series.AddRange(ComputedGraphSeriesFactory.Create(series).ToList());'
                 if computed_series_specs else ''
@@ -3286,7 +3333,7 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_type_combo = ttk.Combobox(
             advanced_frame,
             textvariable=self.graph_type_var,
-            values=('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'),
+            values=('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'bar', 'custom'),
             state='disabled',
             width=22,
         )
@@ -3311,6 +3358,13 @@ class PluginGeneratorApp(tk.Tk):
             variable=self.graph_legend_var,
         )
         self.graph_legend_checkbutton.grid(row=14, column=0, columnspan=2, sticky='w', pady=4)
+        self.overlay_cursor_bars_var = tk.BooleanVar(value=False)
+        self.overlay_cursor_bars_checkbutton = tk.Checkbutton(
+            advanced_frame,
+            text='Overlay parameter bars (cursor histogram)',
+            variable=self.overlay_cursor_bars_var,
+        )
+        self.overlay_cursor_bars_checkbutton.grid(row=15, column=0, columnspan=2, sticky='w', pady=4)
         self.update_graph_states()
         
         # === Action Buttons ===
@@ -3904,6 +3958,7 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_title_var.set('')
         self.graph_units_var.set('')
         self.graph_legend_var.set(True)
+        self.overlay_cursor_bars_var.set(False)
         self.update_graph_states()
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
@@ -3947,6 +4002,10 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_units_entry.config(state=state)
         self.computed_series_entry.config(state=state)
         self.graph_legend_checkbutton.config(state=state)
+        overlay_state = tk.NORMAL if self.graph_type_var.get() == 'cursor-histogram' else tk.DISABLED
+        self.overlay_cursor_bars_checkbutton.config(state=overlay_state)
+        if overlay_state == tk.DISABLED:
+            self.overlay_cursor_bars_var.set(False)
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output, library, icon, and ATLAS paths?'):
@@ -3981,6 +4040,7 @@ class PluginGeneratorApp(tk.Tk):
             'graph_title': self.graph_title_var.get(),
             'graph_units': self.graph_units_var.get(),
             'show_graph_legend': self.graph_legend_var.get(),
+            'overlay_cursor_bars': self.overlay_cursor_bars_var.get(),
         }
 
     def apply_preset_configuration(self, configuration):
@@ -4012,6 +4072,7 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_title_var.set(configuration.get('graph_title', ''))
         self.graph_units_var.set(configuration.get('graph_units', ''))
         self.graph_legend_var.set(configuration.get('show_graph_legend', True))
+        self.overlay_cursor_bars_var.set(configuration.get('overlay_cursor_bars', False))
         self.update_behavior_states()
 
     def save_preset_dialog(self):
@@ -4121,6 +4182,7 @@ class PluginGeneratorApp(tk.Tk):
                 graph_title=self.graph_title_var.get(),
                 graph_units=graph_units,
                 show_graph_legend=self.graph_legend_var.get(),
+                overlay_cursor_bars=self.overlay_cursor_bars_var.get(),
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,

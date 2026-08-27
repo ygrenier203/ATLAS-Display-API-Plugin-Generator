@@ -93,7 +93,7 @@ Generated time graphs include a grid, automatic per-series scaling, a color lege
 
 Computed traces can combine the first two raw graph series using `difference`, `sum`, `average`, or safe `ratio` operations. Enter comma-separated `Name:operation` values in the GUI or repeat `--computed-series`, for example `--computed-series Delta:difference`.
 
-Graph modes also include `scatter` (first parameter on X, second on Y), `histogram` (distribution buckets for the first parameter), and `bar` (one average-value bar per series). Each mode uses the same visible-range request and statistics pipeline.
+Graph modes also include `scatter` (first parameter on X, second on Y), `histogram` (distribution buckets for the first parameter), `cursor-histogram` (one bar per parameter using its current cursor value), and `bar` (one visible-range average bar per series). Cursor histograms require **Current value + visible range** behavior. Enable **Overlay parameter bars** to draw their translucent bars on top of one another instead of side by side; the CLI equivalents are `--graph cursor-histogram` and `--overlay-cursor-bars`.
 
 Select `custom` when the standard renderers do not fit. The generator creates a separate `CustomGraphRenderer.cs` with a `DrawingContext`, graph extents, and all requested series ready for arbitrary native WPF drawing.
 
