@@ -37,21 +37,19 @@ def load_preset(path):
 
 def list_deployed_plugins(atlas_install_directory):
     candidates = []
-    custom_root = os.path.join(atlas_install_directory, 'CustomDLLs')
-    roots = [atlas_install_directory, custom_root]
-    for root in roots:
-        if not os.path.isdir(root):
+    root = atlas_install_directory
+    if not os.path.isdir(root):
+        return []
+    for filename in os.listdir(root):
+        lowered = filename.lower()
+        is_plugin = lowered.endswith('customplugin.dll')
+        if not is_plugin or lowered.startswith('mat.atlas.plugins.'):
             continue
-        for filename in os.listdir(root):
-            lowered = filename.lower()
-            is_plugin = lowered.endswith('plugin.dll') or os.path.normcase(root) == os.path.normcase(custom_root)
-            if not is_plugin or lowered.startswith('mat.atlas.plugins.'):
-                continue
-            if lowered.startswith(('system.', 'microsoft.', 'newtonsoft.', 'autofac.')):
-                continue
-            path = os.path.join(root, filename)
-            if os.path.isfile(path):
-                candidates.append(path)
+        if lowered.startswith(('system.', 'microsoft.', 'newtonsoft.', 'autofac.')):
+            continue
+        path = os.path.join(root, filename)
+        if os.path.isfile(path):
+            candidates.append(path)
     return sorted(set(candidates), key=lambda path: os.path.basename(path).lower())
 
 
