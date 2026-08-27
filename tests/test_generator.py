@@ -59,7 +59,7 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('double.IsNaN', renderer)
         self.assertIn('double.IsInfinity', renderer)
         self.assertIn('var validSeries = series.Where(item => item.Timestamps.Count > 1)', renderer)
-        self.assertIn('var start = validSeries.Min', renderer)
+        self.assertIn('viewportStart ?? validSeries.Min', renderer)
         self.assertIn('IReadOnlyList<long> Timestamps', series)
         self.assertIn('IReadOnlyList<double> Values', series)
 
@@ -707,6 +707,14 @@ class GenerationTests(unittest.TestCase):
         self.assertIn("StringFormat='Units: {0}'", view)
         self.assertIn('GraphUnits = { "km/h", "%" };', viewmodel)
         self.assertIn('series.Unit = unit;', viewmodel)
+        self.assertIn('using MAT.Atlas.Client.Presentation.Services;', viewmodel)
+        self.assertIn('ISessionCursorService sessionCursorService', viewmodel)
+        self.assertIn('this.sessionCursorService.MoveCursor(primarySession, timestamp);', viewmodel)
+        self.assertIn('MouseLeftButtonDown', codebehind)
+        self.assertIn('MouseWheel', codebehind)
+        self.assertIn('ModifierKeys.Shift', codebehind)
+        self.assertIn('private const bool UsesTimeAxis = true;', codebehind)
+        self.assertIn('this.viewportStart', codebehind)
         self.assertIn('public string Unit', series_viewmodel)
         ET.parse(view_path)
 

@@ -567,6 +567,8 @@ namespace {namespace}
             }}
         }}
 
+{graph_cursor_method}
+
 {command_handlers}
     }}
 }}
@@ -758,6 +760,22 @@ CURRENT_VALUE_UPDATE_METHOD = '''        public void UpdateCurrentValue(double v
         {
             this.CurrentValue = value;
             this.CurrentTimestamp = timestamp;
+        }'''
+
+GRAPH_CURSOR_METHOD = '''        public void MoveCursor(long timestamp)
+        {
+            if (!this.CanRetrieveData ||
+                this.ActiveCompositeSessionContainer?.IsPrimaryCompositeSessionAvailable != true)
+            {
+                return;
+            }
+
+            var primarySession = this.ActiveCompositeSessionContainer.CompositeSessions
+                .FirstOrDefault(session => session.IsPrimary);
+            if (primarySession != null)
+            {
+                this.sessionCursorService.MoveCursor(primarySession, timestamp);
+            }
         }'''
 
 CURRENT_VALUE_TEXT = '''                            <TextBlock Text="{Binding CurrentValue, StringFormat='Current: {0:F3}'}"
@@ -1097,7 +1115,8 @@ namespace {namespace}
     {{
         private const string GraphType = "__GRAPH_TYPE__";
 
-        public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series,
+            long? viewportStart = null, long? viewportEnd = null)
         {{
             drawingContext.DrawRectangle(Brushes.Transparent, new Pen(Brushes.DimGray, 1), new Rect(extents));
             var gridPen = new Pen(Brushes.DimGray, 0.5);
@@ -1143,8 +1162,8 @@ namespace {namespace}
                 return;
             }}
 
-            var start = validSeries.Min(item => item.Timestamps.First());
-            var end = validSeries.Max(item => item.Timestamps.Last());
+            var start = viewportStart ?? validSeries.Min(item => item.Timestamps.First());
+            var end = viewportEnd ?? validSeries.Max(item => item.Timestamps.Last());
             var timeRange = Math.Max(1, end - start);
             foreach (var item in validSeries)
             {{
@@ -1152,7 +1171,8 @@ namespace {namespace}
             }}
         }}
 
-        public void DrawCursor(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series, long? timestamp)
+        public void DrawCursor(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series,
+            long? timestamp, long? viewportStart = null, long? viewportEnd = null)
         {{
             if (!timestamp.HasValue || extents.Width <= 0 || extents.Height <= 0)
             {{
@@ -1165,8 +1185,8 @@ namespace {namespace}
                 return;
             }}
 
-            var start = validSeries.Min(item => item.Timestamps.First());
-            var end = validSeries.Max(item => item.Timestamps.Last());
+            var start = viewportStart ?? validSeries.Min(item => item.Timestamps.First());
+            var end = viewportEnd ?? validSeries.Max(item => item.Timestamps.Last());
             if (timestamp.Value < start || timestamp.Value > end)
             {{
                 return;
@@ -1192,13 +1212,15 @@ namespace {namespace}
             for (var index = 0; index < count; index++)
             {{
                 var value = series.Values[index];
-                if (double.IsNaN(value) || double.IsInfinity(value))
+                var timestamp = series.Timestamps[index];
+                if (timestamp < start || timestamp > start + timeRange ||
+                    double.IsNaN(value) || double.IsInfinity(value))
                 {{
                     previous = null;
                     continue;
                 }}
 
-                var x = ((series.Timestamps[index] - start) / (double)timeRange) * extents.Width;
+                var x = ((timestamp - start) / (double)timeRange) * extents.Width;
                 var y = extents.Height - (((value - minimum) / valueRange) * extents.Height);
                 var point = new Point(x, y);
                 if (previous.HasValue)
@@ -1887,7 +1909,7 @@ SERVICE_DEFINITIONS = {
     'IDataRequestSignalFactory': {'namespace': 'MAT.Atlas.Client.Platform.Data', 'param': 'dataRequestSignalFactory'},
     'ISessionService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionService'},
     'ISessionSummaryService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionSummaryService'},
-    'ISessionCursorService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionCursorService'},
+    'ISessionCursorService': {'namespace': 'MAT.Atlas.Client.Presentation.Services', 'param': 'sessionCursorService'},
 }
 
 BEHAVIOR_CURRENT_VALUE = 'Current value at cursor'
@@ -2219,18 +2241,21 @@ def build_status_state():
 '''
     return fields, properties
 
-GRAPH_VIEW_CODEBEHIND_TEMPLATE = '''using System.Collections.Generic;
+GRAPH_VIEW_CODEBEHIND_TEMPLATE = '''using System;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace {namespace}
 {{
     public partial class {view_class} : UserControl
     {{
+        private const bool UsesTimeAxis = {uses_time_axis};
         private static readonly Color[] Palette =
         {{
             Colors.DeepSkyBlue, Colors.Orange, Colors.LimeGreen, Colors.Magenta,
@@ -2238,12 +2263,21 @@ namespace {namespace}
         }};
         private readonly GraphRenderer graphRenderer = new GraphRenderer();
         private {viewmodel_class} viewModel;
+        private long? loadedStart;
+        private long? loadedEnd;
+        private long? viewportStart;
+        private long? viewportEnd;
+        private bool movingCursor;
 
         public {view_class}()
         {{
             this.InitializeComponent();
             this.DataContextChanged += this.OnDataContextChanged;
             this.SizeChanged += (sender, args) => this.Redraw();
+            this.GraphVisualLayer.MouseLeftButtonDown += this.OnGraphMouseLeftButtonDown;
+            this.GraphVisualLayer.MouseMove += this.OnGraphMouseMove;
+            this.GraphVisualLayer.MouseLeftButtonUp += this.OnGraphMouseLeftButtonUp;
+            this.GraphVisualLayer.MouseWheel += this.OnGraphMouseWheel;
         }}
 
         private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs args)
@@ -2311,15 +2345,134 @@ namespace {namespace}
                 item.Timestamps,
                 item.Values,
                 Palette[index % Palette.Length])).ToList() ?? new List<GraphSeries>();
+            this.UpdateLoadedRange(series);
 {computed_series_update}
-            visual.Draw(context => this.graphRenderer.Draw(context, visual.Extents, series));
+            visual.Draw(context => this.graphRenderer.Draw(
+                context, visual.Extents, series, this.viewportStart, this.viewportEnd));
             var cursorVisual = this.CursorVisualLayer.Visual;
             var cursorTimestamp = this.viewModel?.Series.Select(item => item.CurrentTimestamp).FirstOrDefault(value => value.HasValue);
             cursorVisual.Draw(context => this.graphRenderer.DrawCursor(
                 context,
                 cursorVisual.Extents,
                 series,
-                cursorTimestamp));
+                cursorTimestamp,
+                this.viewportStart,
+                this.viewportEnd));
+        }}
+
+        private void UpdateLoadedRange(IReadOnlyList<GraphSeries> series)
+        {{
+            if (!UsesTimeAxis)
+            {{
+                return;
+            }}
+
+            var ranged = series.Where(item => item.Timestamps.Count > 1).ToList();
+            if (ranged.Count == 0)
+            {{
+                this.loadedStart = this.loadedEnd = this.viewportStart = this.viewportEnd = null;
+                return;
+            }}
+
+            var start = ranged.Min(item => item.Timestamps.First());
+            var end = ranged.Max(item => item.Timestamps.Last());
+            if (this.loadedStart != start || this.loadedEnd != end)
+            {{
+                this.loadedStart = this.viewportStart = start;
+                this.loadedEnd = this.viewportEnd = end;
+            }}
+        }}
+
+        private void OnGraphMouseLeftButtonDown(object sender, MouseButtonEventArgs args)
+        {{
+            if (!UsesTimeAxis)
+            {{
+                return;
+            }}
+
+            this.movingCursor = true;
+            this.GraphVisualLayer.CaptureMouse();
+            this.MoveCursor(args.GetPosition(this.GraphVisualLayer).X);
+            args.Handled = true;
+        }}
+
+        private void OnGraphMouseMove(object sender, MouseEventArgs args)
+        {{
+            if (this.movingCursor && args.LeftButton == MouseButtonState.Pressed)
+            {{
+                this.MoveCursor(args.GetPosition(this.GraphVisualLayer).X);
+                args.Handled = true;
+            }}
+        }}
+
+        private void OnGraphMouseLeftButtonUp(object sender, MouseButtonEventArgs args)
+        {{
+            if (!this.movingCursor)
+            {{
+                return;
+            }}
+
+            this.MoveCursor(args.GetPosition(this.GraphVisualLayer).X);
+            this.movingCursor = false;
+            this.GraphVisualLayer.ReleaseMouseCapture();
+            args.Handled = true;
+        }}
+
+        private void MoveCursor(double x)
+        {{
+            if (!this.viewportStart.HasValue || !this.viewportEnd.HasValue ||
+                this.GraphVisualLayer.ActualWidth <= 0 || this.viewModel == null)
+            {{
+                return;
+            }}
+
+            var fraction = Math.Max(0d, Math.Min(1d, x / this.GraphVisualLayer.ActualWidth));
+            var timestamp = this.viewportStart.Value +
+                (long)((this.viewportEnd.Value - this.viewportStart.Value) * fraction);
+            this.viewModel.MoveCursor(timestamp);
+        }}
+
+        private void OnGraphMouseWheel(object sender, MouseWheelEventArgs args)
+        {{
+            if (!UsesTimeAxis || !this.viewportStart.HasValue || !this.viewportEnd.HasValue ||
+                !this.loadedStart.HasValue || !this.loadedEnd.HasValue)
+            {{
+                return;
+            }}
+
+            var start = this.viewportStart.Value;
+            var end = this.viewportEnd.Value;
+            var span = Math.Max(1L, end - start);
+            if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+            {{
+                var direction = args.Delta > 0 ? -1d : 1d;
+                var offset = (long)(span * 0.1d * direction);
+                this.SetViewport(start + offset, end + offset);
+            }}
+            else
+            {{
+                var x = args.GetPosition(this.GraphVisualLayer).X;
+                var anchor = Math.Max(0d, Math.Min(1d, x / Math.Max(1d, this.GraphVisualLayer.ActualWidth)));
+                var factor = args.Delta > 0 ? 0.8d : 1.25d;
+                var newSpan = Math.Max(1L, (long)(span * factor));
+                var anchorTimestamp = start + (long)(span * anchor);
+                var newStart = anchorTimestamp - (long)(newSpan * anchor);
+                this.SetViewport(newStart, newStart + newSpan);
+            }}
+
+            this.Redraw();
+            args.Handled = true;
+        }}
+
+        private void SetViewport(long start, long end)
+        {{
+            var loadedStart = this.loadedStart.Value;
+            var loadedEnd = this.loadedEnd.Value;
+            var loadedSpan = Math.Max(1L, loadedEnd - loadedStart);
+            var span = Math.Min(loadedSpan, Math.Max(1L, end - start));
+            start = Math.Max(loadedStart, Math.Min(start, loadedEnd - span));
+            this.viewportStart = start;
+            this.viewportEnd = start + span;
         }}
     }}
 }}
@@ -2607,6 +2760,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
 
     # ISignalBus/IDataRequestSignalFactory are always injected by ParameterSampleDisplayViewModelBase.
     requested_services = list(service_names or [])
+    if graph_type != 'none' and 'ISessionCursorService' not in requested_services:
+        requested_services.append('ISessionCursorService')
     if behavior == BEHAVIOR_BASIC and any(spec.get('generate_log', False) for spec in command_specs):
         if 'ILogger' not in requested_services:
             requested_services.append('ILogger')
@@ -2700,6 +2855,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 + ' };'
                 if behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE) else ''
             ),
+            graph_cursor_method=GRAPH_CURSOR_METHOD if graph_type != 'none' else '',
         ),
     }
     if behavior == BEHAVIOR_CURRENT_VALUE:
@@ -2761,6 +2917,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             namespace=namespace,
             view_class=f'{name}View',
             viewmodel_class=f'{name}ViewModel',
+            uses_time_axis='true' if graph_type == 'time-series' else 'false',
             computed_series_update=(
                 '            series.AddRange(ComputedGraphSeriesFactory.Create(series).ToList());'
                 if computed_series_specs else ''
