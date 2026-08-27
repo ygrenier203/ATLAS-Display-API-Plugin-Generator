@@ -2623,6 +2623,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         extra_usings += 'using System.Collections.ObjectModel;\n'
     if any(spec.get('break_when_attached', False) for spec in command_specs):
         extra_usings += 'using System.Diagnostics;\n'
+    if graph_type and graph_type != 'none':
+        extra_usings += 'using MAT.OCS.Core;\n'
     extra_ctor_params = ''
     extra_ctor_assignments = ''
     service_members = ''
