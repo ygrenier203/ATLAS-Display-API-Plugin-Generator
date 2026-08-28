@@ -466,7 +466,7 @@ namespace {namespace}
         [Display(Order = 0)]
         public int DataRequestSampleCount
         {{
-            get => this.dataRequestSampleCount = this.ReadProperty(1000);
+            get => this.dataRequestSampleCount = this.ReadProperty({default_sample_count});
             set
             {{
                 if (this.SetProperty(ref this.dataRequestSampleCount, value))
@@ -2776,7 +2776,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
                     item_field_specs=None, graph_type='none', computed_series_specs=None, graph_title='',
                     graph_units=None, show_graph_legend=True, overlay_cursor_bars=False,
-                    dll_specs=None, atlas_install_directory=None):
+                    dll_specs=None, atlas_install_directory=None, sample_count = 100):
     if not include_view:
         raise ValueError('Generated display plugins require a WPF view.')
     name = normalize_plugin_name(name)
@@ -3035,6 +3035,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 if behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE) else ''
             ),
             graph_cursor_method=GRAPH_CURSOR_METHOD if graph_type != 'none' else '',
+            default_sample_count=sample_count,
         ),
     }
     if behavior == BEHAVIOR_CURRENT_VALUE:
@@ -3268,6 +3269,7 @@ class PluginGeneratorApp(tk.Tk):
             ),
             state='readonly',
         )
+        
         behavior_combo.pack(fill=tk.X, pady=(0, 4))
         behavior_combo.bind('<<ComboboxSelected>>', lambda event: self.update_behavior_states())
         tk.Label(
@@ -3275,6 +3277,12 @@ class PluginGeneratorApp(tk.Tk):
             text='Choose cursor values, visible-range samples, both, compare sessions, or a basic display.',
             font=('Arial', 8, 'italic'), justify='left', wraplength=600,
         ).pack(anchor='w', pady=(0, 4))
+
+        # Ask for the default sample count if visible range behavior is selected
+        tk.Label(config_frame, text='Default sample count:').pack(anchor='w', pady=(8, 4))
+        self.sample_count_var = tk.IntVar(value=100)
+        self.sample_count_entry = tk.Entry(config_frame, textvariable=self.sample_count_var)
+        self.sample_count_entry.pack(fill=tk.X, pady=(0, 4))
 
         tk.Label(config_frame, text='Basic display layout:').pack(anchor='w', pady=(8, 4))
         self.basic_layout_var = tk.StringVar(value='text')
@@ -4325,6 +4333,7 @@ class PluginGeneratorApp(tk.Tk):
                 service_names=service_names,
                 dll_specs=self.dll_specs,
                 atlas_install_directory=self.atlas_install_var.get().strip(),
+                sample_count=self.sample_count_var.get(),
             )
             copied_icon_path = os.path.join(
                 target,
