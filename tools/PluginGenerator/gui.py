@@ -2450,6 +2450,10 @@ namespace {namespace}
         private long? viewportStart;
         private long? viewportEnd;
         private bool movingCursor;
+        private bool panningRange;
+        private double panOriginX;
+        private long panOriginStart;
+        private long panOriginEnd;
 
         public {view_class}()
         {{
@@ -2459,6 +2463,8 @@ namespace {namespace}
             this.GraphVisualLayer.MouseLeftButtonDown += this.OnGraphMouseLeftButtonDown;
             this.GraphVisualLayer.MouseMove += this.OnGraphMouseMove;
             this.GraphVisualLayer.MouseLeftButtonUp += this.OnGraphMouseLeftButtonUp;
+            this.GraphVisualLayer.MouseRightButtonDown += this.OnGraphMouseRightButtonDown;
+            this.GraphVisualLayer.MouseRightButtonUp += this.OnGraphMouseRightButtonUp;
             this.GraphVisualLayer.MouseWheel += this.OnGraphMouseWheel;
         }}
 
@@ -2585,6 +2591,43 @@ namespace {namespace}
                 this.MoveCursor(args.GetPosition(this.GraphVisualLayer).X);
                 args.Handled = true;
             }}
+            else if (this.panningRange && args.RightButton == MouseButtonState.Pressed &&
+                this.GraphVisualLayer.ActualWidth > 0)
+            {{
+                var delta = args.GetPosition(this.GraphVisualLayer).X - this.panOriginX;
+                var span = this.panOriginEnd - this.panOriginStart;
+                var offset = (long)(-(delta / this.GraphVisualLayer.ActualWidth) * span);
+                this.SetViewport(this.panOriginStart + offset, this.panOriginEnd + offset);
+                this.Redraw();
+                args.Handled = true;
+            }}
+        }}
+
+        private void OnGraphMouseRightButtonDown(object sender, MouseButtonEventArgs args)
+        {{
+            if (!UsesTimeAxis || !this.viewportStart.HasValue || !this.viewportEnd.HasValue)
+            {{
+                return;
+            }}
+
+            this.panningRange = true;
+            this.panOriginX = args.GetPosition(this.GraphVisualLayer).X;
+            this.panOriginStart = this.viewportStart.Value;
+            this.panOriginEnd = this.viewportEnd.Value;
+            this.GraphVisualLayer.CaptureMouse();
+            args.Handled = true;
+        }}
+
+        private void OnGraphMouseRightButtonUp(object sender, MouseButtonEventArgs args)
+        {{
+            if (!this.panningRange)
+            {{
+                return;
+            }}
+
+            this.panningRange = false;
+            this.GraphVisualLayer.ReleaseMouseCapture();
+            args.Handled = true;
         }}
 
         private void OnGraphMouseLeftButtonUp(object sender, MouseButtonEventArgs args)
@@ -2633,12 +2676,16 @@ namespace {namespace}
             }}
             else
             {{
-                var x = args.GetPosition(this.GraphVisualLayer).X;
-                var anchor = Math.Max(0d, Math.Min(1d, x / Math.Max(1d, this.GraphVisualLayer.ActualWidth)));
                 var factor = args.Delta > 0 ? 0.8d : 1.25d;
                 var newSpan = Math.Max(1L, (long)(span * factor));
-                var anchorTimestamp = start + (long)(span * anchor);
-                var newStart = anchorTimestamp - (long)(newSpan * anchor);
+                var cursorTimestamp = this.viewModel?.Series
+                    .Select(item => item.CurrentTimestamp)
+                    .FirstOrDefault(value => value.HasValue);
+                var anchorTimestamp = cursorTimestamp.HasValue &&
+                    cursorTimestamp.Value >= start && cursorTimestamp.Value <= end
+                    ? cursorTimestamp.Value
+                    : start + (span / 2L);
+                var newStart = anchorTimestamp - (newSpan / 2L);
                 this.SetViewport(newStart, newStart + newSpan);
             }}
 
