@@ -1341,7 +1341,7 @@ namespace {namespace}
 
             var minimum = Math.Min(0d, current.Min(item => item.CurrentValue));
             var maximum = Math.Max(0d, current.Max(item => item.CurrentValue));
-            var range = Math.Max(double.Epsilon, maximum - minimum);
+            var range = Math.Max(double.Epsilon, maximum * 1.8 - minimum);
             var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
             var slotWidth = OverlayCursorBars ? extents.Width : extents.Width / current.Count;
             for (var index = 0; index < current.Count; index++)
@@ -1603,7 +1603,7 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="3*" />
-                <ColumnDefinition Width="{graph_legend_width}" />
+                <ColumnDefinition Width="0" />
             </Grid.ColumnDefinitions>
             <Border Margin="6" BorderBrush="DimGray" BorderThickness="1">
                 <Grid>
@@ -1611,26 +1611,6 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                     <displayPluginLibrary:VisualLayer x:Name="CursorVisualLayer" />
                 </Grid>
             </Border>
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
-                          Visibility="{graph_legend_visibility}">
-                <ItemsControl ItemsSource="{{Binding Series}}">
-                    <ItemsControl.ItemTemplate>
-                        <DataTemplate>
-                            <Border BorderBrush="DimGray" BorderThickness="0,0,0,1" Padding="8">
-                                <StackPanel>
-                                    <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
-                                    <TextBlock Text="{{Binding Unit, StringFormat='Units: {{0}}'}}" Foreground="LightGray" />
-{current_value_text}
-                                    <TextBlock Text="{{Binding Minimum, StringFormat='Minimum: {{0:F3}}'}}" Foreground="White" />
-                                    <TextBlock Text="{{Binding Maximum, StringFormat='Maximum: {{0:F3}}'}}" Foreground="White" />
-                                    <TextBlock Text="{{Binding Average, StringFormat='Average: {{0:F3}}'}}" Foreground="White" />
-                                    <TextBlock Text="{{Binding SampleCount, StringFormat='Samples: {{0}}'}}" Foreground="White" />
-                                </StackPanel>
-                            </Border>
-                        </DataTemplate>
-                    </ItemsControl.ItemTemplate>
-                </ItemsControl>
-            </ScrollViewer>
         </Grid>
     </DockPanel>
 </UserControl>
@@ -2784,7 +2764,6 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     include_parameters = behavior_uses_parameters(behavior)
     if not isinstance(parameter_max_count, int) or parameter_max_count < 1:
         raise ValueError('Maximum parameter count must be a positive integer.')
-    validated_atlas_parameters = []
     existing_atlas_parameters = set()
     expanded_atlas_parameters = []
     for identifier in atlas_parameters or []:
@@ -3075,7 +3054,6 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         files[f'{name}View.xaml'] = view_template.format(
             namespace=namespace,
             view_class=f'{name}View',
-            current_value_text=(CURRENT_VALUE_TEXT if behavior == BEHAVIOR_CURRENT_AND_RANGE else ''),
             command_buttons=command_buttons,
             graph_title_block=(
                 f'        <TextBlock DockPanel.Dock="Top" Text="{html.escape(graph_title, quote=True)}" '
@@ -3083,7 +3061,6 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 if graph_title and graph_type != 'none' else ''
             ),
             graph_legend_width='240' if show_graph_legend else '0',
-            graph_legend_visibility='Visible' if show_graph_legend else 'Collapsed',
             basic_content=build_basic_layout_content(
                 basic_layout,
                 f'{name}View',
