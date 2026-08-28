@@ -3249,6 +3249,7 @@ class PluginGeneratorApp(tk.Tk):
         
         behavior_combo.pack(fill=tk.X, pady=(0, 4))
         behavior_combo.bind('<<ComboboxSelected>>', lambda event: self.update_behavior_states())
+        behavior_combo.bind('<MouseWheel>', lambda event: "break")
         tk.Label(
             config_frame,
             text='Choose cursor values, visible-range samples, both, compare sessions, or a basic display.',
@@ -3269,6 +3270,7 @@ class PluginGeneratorApp(tk.Tk):
             values=BASIC_LAYOUTS,
             state='disabled',
         )
+        self.basic_layout_combo.bind('<MouseWheel>', lambda event: "break")
         self.basic_layout_combo.pack(fill=tk.X, pady=(0, 4))
         
         # === Injected Services ===
@@ -3457,6 +3459,7 @@ class PluginGeneratorApp(tk.Tk):
             width=22,
         )
         self.graph_type_combo.grid(row=10, column=1, sticky='w', padx=8)
+        self.graph_type_combo.bind('<MouseWheel>', lambda event: "break")
         self.graph_type_combo.bind('<<ComboboxSelected>>', lambda event: self.update_graph_states())
         tk.Label(advanced_frame, text='Computed series (Name:operation):').grid(row=11, column=0, sticky='w', pady=4)
         self.computed_series_var = tk.StringVar(value='')
