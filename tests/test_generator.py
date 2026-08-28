@@ -67,6 +67,8 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('DrawTimeAxes', renderer)
         self.assertIn('DrawNumericAxes', renderer)
         self.assertIn('DrawValueAndCategoryAxes', renderer)
+        self.assertIn('current.Min(item => item.CurrentValue)', renderer)
+        self.assertIn('current.Max(item => item.CurrentValue)', renderer)
         self.assertIn('new FormattedText(', renderer)
         self.assertIn('var visibleValues = validSeries.SelectMany', renderer)
         self.assertIn('double minimum, double valueRange', renderer)

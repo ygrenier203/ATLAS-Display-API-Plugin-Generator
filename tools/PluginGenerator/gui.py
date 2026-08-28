@@ -1388,12 +1388,21 @@ namespace {namespace}
                 return;
             }}
 
-            var average = current.Average(item => item.CurrentValue);
-            var stdev = Math.Sqrt(current.Average(item => Math.Pow(item.CurrentValue - average, 2)));
+            var minimum = Math.Min(0d, current.Min(item => item.CurrentValue));
+            var maximum = Math.Max(0d, current.Max(item => item.CurrentValue));
+            if (Math.Abs(maximum - minimum) < double.Epsilon)
+            {{
+                minimum = -1d;
+                maximum = 1d;
+            }}
+            else
+            {{
+                var padding = (maximum - minimum) * 0.1d;
+                if (minimum < 0d) minimum -= padding;
+                if (maximum > 0d) maximum += padding;
+            }}
 
-            var minimum = Math.Floor(average - 3.5 * stdev);
-            var maximum = Math.Ceiling(average + 3.5 * stdev);
-            var range = Math.Max(double.Epsilon, maximum - minimum);
+            var range = maximum - minimum;
             var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
             var slotWidth = OverlayCursorBars ? extents.Width : extents.Width / current.Count;
             for (var index = 0; index < current.Count; index++)
