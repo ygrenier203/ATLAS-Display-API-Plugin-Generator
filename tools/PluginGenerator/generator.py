@@ -39,7 +39,7 @@ def run(args=None):
 	parser.add_argument('--collection-name', default='Items', help='starter collection property name')
 	parser.add_argument('--item-class', default='ItemViewModel', help='starter collection item class name')
 	parser.add_argument('--item-field', action='append', default=[], help='item field as Name:type; repeat for multiple fields')
-	parser.add_argument('--graph', choices=('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'bar', 'custom'), default='none', help='graph renderer for visible-range data')
+	parser.add_argument('--graph', choices=('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'cursor-points', 'bar', 'custom'), default='none', help='graph renderer for visible-range or cursor data')
 	parser.add_argument('--computed-series', action='append', default=[], help='computed trace as Name:operation')
 	parser.add_argument('--graph-title', default='', help='title displayed above the graph')
 	parser.add_argument('--graph-unit', action='append', default=[], help='unit for a graph series, in parameter order; repeat as needed')
@@ -101,7 +101,9 @@ def run(args=None):
 		parser.error('--item-collection requires --behavior basic.')
 	if options.layout != 'text' and behavior != BEHAVIOR_BASIC:
 		parser.error('--layout requires --behavior basic.')
-	if options.graph != 'none' and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
+	if options.graph in ('cursor-histogram', 'cursor-points') and behavior != BEHAVIOR_CURRENT_VALUE:
+		parser.error('--graph cursor-histogram and cursor-points require --behavior current-value.')
+	if options.graph not in ('none', 'cursor-histogram', 'cursor-points') and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
 		parser.error('--graph requires a visible-range behavior.')
 	if not icon_path:
 		parser.error('--icon is required on first use. Choose the PNG icon for the plugin.')

@@ -40,16 +40,14 @@ def list_deployed_plugins(atlas_install_directory):
     root = atlas_install_directory
     if not os.path.isdir(root):
         return []
-    for filename in os.listdir(root):
-        lowered = filename.lower()
-        is_plugin = lowered.endswith('customplugin.dll')
-        if not is_plugin or lowered.startswith('mat.atlas.plugins.'):
-            continue
-        if lowered.startswith(('system.', 'microsoft.', 'newtonsoft.', 'autofac.')):
-            continue
-        path = os.path.join(root, filename)
-        if os.path.isfile(path):
-            candidates.append(path)
+    for directory, _, filenames in os.walk(root):
+        for filename in filenames:
+            lowered = filename.lower()
+            if not lowered.endswith('.dll') or lowered.startswith('mat.atlas.plugins.'):
+                continue
+            if lowered.startswith(('system.', 'microsoft.', 'newtonsoft.', 'autofac.')):
+                continue
+            candidates.append(os.path.join(directory, filename))
     return sorted(set(candidates), key=lambda path: os.path.basename(path).lower())
 
 
@@ -454,28 +452,11 @@ namespace {namespace}
             ILogger logger{extra_ctor_params}) :
             base(signalBus, dataRequestSignalFactory, logger)
         {{
-            this.Disposables.Add(this.SignalBus.Subscribe<DataResultSignal>(
-                this.HandleDataResultSignal,
-                signal => signal.SourceId == this.ScopeIdentity.Guid));
+{data_subscription}
 {cursor_subscription}
 {extra_ctor_assignments}{command_initializers}        }}
 
-        [Category("Data")]
-        [DisplayName("Sample Count")]
-        [Description("Maximum number of samples requested across the visible time range.")]
-        [Display(Order = 0)]
-        public int DataRequestSampleCount
-        {{
-            get => this.dataRequestSampleCount = this.ReadProperty({default_sample_count});
-            set
-            {{
-                if (this.SetProperty(ref this.dataRequestSampleCount, value))
-                {{
-                    this.SaveProperty(value);
-                    this.MakeDataRequests(false, true);
-                }}
-            }}
-        }}
+{sample_count_members}
 
         [Browsable(false)]
         public ObservableCollection<TimebaseSeriesViewModel> Series {{ get; }} =
@@ -484,62 +465,13 @@ namespace {namespace}
 {status_state_properties}{display_properties}
 {command_properties}
     {atlas_parameter_setup}
-        protected override async Task OnMakeTimebaseDataRequestsAsync(ICompositeSession compositeSession)
-        {{
-            await this.ExecuteOnUiAsync(this.SyncSeries);
-
-            foreach (var parameter in this.DisplayParameterService.PrimaryParameters)
-            {{
-                var signal = this.DataRequestSignalFactory.CreateDataRequestSignal(
-                    this.ScopeIdentity.Guid,
-                    parameter,
-                    compositeSession.TimebaseRange,
-                    this.DataRequestSampleCount,
-                    SampleMode.Mean);
-
-                this.SignalBus.Send(signal);
-            }}
-        }}
+{timebase_request_method}
 
 {cursor_request_method}
 {cursor_result_handler}
 
 {session_notification_hooks}
-        private async void HandleDataResultSignal(DataResultSignal signal)
-        {{
-            try
-            {{
-                var parameterValues = signal.Data.ParameterValues;
-                long[] timestamps;
-                double[] values;
-                parameterValues.Lock();
-                try
-                {{
-                    if (parameterValues.SampleCount == 0 || parameterValues.Data == null)
-                    {{
-                        return;
-                    }}
-
-                    timestamps = parameterValues.Timestamp.ToArray();
-                    values = parameterValues.Data.ToArray();
-                }}
-                finally
-                {{
-                    parameterValues.Unlock();
-                }}
-
-                await this.ExecuteOnUiAsync(() =>
-                {{
-                    var series = this.Series.FirstOrDefault(item =>
-                        item.ParameterIdentifier == signal.Data.Request.Parameter.InstanceIdentifier);
-                    series?.Update(timestamps, values);
-                }});
-            }}
-            catch (Exception exception)
-            {{
-                this.Logger.Trace("Error handling visible-range data", exception);
-            }}
-        }}
+{data_result_handler}
 
         private void SyncSeries()
         {{
@@ -680,12 +612,88 @@ namespace {namespace}
 }}
 '''
 
+DATA_SUBSCRIPTION = '''            this.Disposables.Add(this.SignalBus.Subscribe<DataResultSignal>(
+                this.HandleDataResultSignal,
+                signal => signal.SourceId == this.ScopeIdentity.Guid));'''
+
+SAMPLE_COUNT_MEMBERS = '''        [Category("Data")]
+        [DisplayName("Sample Count")]
+        [Description("Maximum number of samples requested across the visible time range.")]
+        [Display(Order = 0)]
+        public int DataRequestSampleCount
+        {
+            get => this.dataRequestSampleCount = this.ReadProperty({default_sample_count});
+            set
+            {
+                if (this.SetProperty(ref this.dataRequestSampleCount, value))
+                {
+                    this.SaveProperty(value);
+                    this.MakeDataRequests(false, true);
+                }
+            }
+        }'''
+
+TIMEBASE_REQUEST_METHOD = '''        protected override async Task OnMakeTimebaseDataRequestsAsync(ICompositeSession compositeSession)
+        {
+            await this.ExecuteOnUiAsync(this.SyncSeries);
+
+            foreach (var parameter in this.DisplayParameterService.PrimaryParameters)
+            {
+                var signal = this.DataRequestSignalFactory.CreateDataRequestSignal(
+                    this.ScopeIdentity.Guid,
+                    parameter,
+                    compositeSession.TimebaseRange,
+                    this.DataRequestSampleCount,
+                    SampleMode.Mean);
+
+                this.SignalBus.Send(signal);
+            }
+        }'''
+
+DATA_RESULT_HANDLER = '''        private async void HandleDataResultSignal(DataResultSignal signal)
+        {
+            try
+            {
+                var parameterValues = signal.Data.ParameterValues;
+                long[] timestamps;
+                double[] values;
+                parameterValues.Lock();
+                try
+                {
+                    if (parameterValues.SampleCount == 0 || parameterValues.Data == null)
+                    {
+                        return;
+                    }
+
+                    timestamps = parameterValues.Timestamp.ToArray();
+                    values = parameterValues.Data.ToArray();
+                }
+                finally
+                {
+                    parameterValues.Unlock();
+                }
+
+                await this.ExecuteOnUiAsync(() =>
+                {
+                    var series = this.Series.FirstOrDefault(item =>
+                        item.ParameterIdentifier == signal.Data.Request.Parameter.InstanceIdentifier);
+                    series?.Update(timestamps, values);
+                });
+            }
+            catch (Exception exception)
+            {
+                this.Logger.Trace("Error handling visible-range data", exception);
+            }
+        }'''
+
 CURSOR_SUBSCRIPTION = '''            this.Disposables.Add(this.SignalBus.Subscribe<SampleResultSignal>(
                 this.HandleSampleResultSignal,
                 signal => signal.SourceId == this.ScopeIdentity.Guid));'''
 
-CURSOR_REQUEST_METHOD = '''        protected override Task OnMakeCursorDataRequestsAsync(ICompositeSession compositeSession)
+CURSOR_REQUEST_METHOD = '''        protected override async Task OnMakeCursorDataRequestsAsync(ICompositeSession compositeSession)
         {
+            await this.ExecuteOnUiAsync(this.SyncSeries);
+
             foreach (var parameter in this.DisplayParameterService.PrimaryParameters)
             {
                 var signal = this.DataRequestSignalFactory.CreateSampleRequestSignal(
@@ -699,8 +707,6 @@ CURSOR_REQUEST_METHOD = '''        protected override Task OnMakeCursorDataReque
 
                 this.SignalBus.Send(signal);
             }
-
-            return Task.CompletedTask;
         }'''
 
 CURSOR_RESULT_HANDLER = '''        private async void HandleSampleResultSignal(SampleResultSignal signal)
@@ -1139,7 +1145,13 @@ namespace {namespace}
 
             if (GraphType == "cursor-histogram")
             {{
-                this.DrawCursorHistogram(drawingContext, extents, series);
+                this.DrawCursorValues(drawingContext, extents, series, false);
+                return;
+            }}
+
+            if (GraphType == "cursor-points")
+            {{
+                this.DrawCursorValues(drawingContext, extents, series, true);
                 return;
             }}
 
@@ -1332,8 +1344,8 @@ namespace {namespace}
                 series.Select(item => item.Name).ToList(), false);
         }}
 
-        private void DrawCursorHistogram(DrawingContext drawingContext, Size extents,
-            IReadOnlyList<GraphSeries> series)
+        private void DrawCursorValues(DrawingContext drawingContext, Size extents,
+            IReadOnlyList<GraphSeries> series, bool drawPoints)
         {{
             var current = series.Where(item =>
                 !double.IsNaN(item.CurrentValue) && !double.IsInfinity(item.CurrentValue)).ToList();
@@ -1360,8 +1372,16 @@ namespace {namespace}
                     : (index * slotWidth) + ((slotWidth - barWidth) / 2d);
                 var color = Color.FromArgb(OverlayCursorBars ? (byte)150 : (byte)230,
                     item.Color.R, item.Color.G, item.Color.B);
-                drawingContext.DrawRectangle(new SolidColorBrush(color), null,
-                    new Rect(x, Math.Min(zeroY, valueY), barWidth, Math.Max(1d, Math.Abs(zeroY - valueY))));
+                if (drawPoints)
+                {{
+                    drawingContext.DrawEllipse(new SolidColorBrush(color), new Pen(Brushes.White, 1d),
+                        new Point(x + (barWidth / 2d), valueY), 5d, 5d);
+                }}
+                else
+                {{
+                    drawingContext.DrawRectangle(new SolidColorBrush(color), null,
+                        new Rect(x, Math.Min(zeroY, valueY), barWidth, Math.Max(1d, Math.Abs(zeroY - valueY))));
+                }}
             }}
 
             this.DrawValueAndCategoryAxes(drawingContext, extents, minimum, maximum,
@@ -1424,7 +1444,7 @@ namespace {namespace}
             {{
                 var label = categories[index];
 
-                string pattern =  "{regex_value}";
+                string pattern =  "__REGEX_VALUE__";
                 bool isNumbered = Regex.IsMatch(label, pattern);
 
                 if (isNumbered)
@@ -1609,7 +1629,7 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="3*" />
-                <ColumnDefinition Width="0" />
+                <ColumnDefinition Width="{graph_legend_width}" />
             </Grid.ColumnDefinitions>
             <Border Margin="6" BorderBrush="DimGray" BorderThickness="1">
                 <Grid>
@@ -1617,6 +1637,23 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                     <displayPluginLibrary:VisualLayer x:Name="CursorVisualLayer" />
                 </Grid>
             </Border>
+            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
+                          Visibility="{graph_legend_visibility}">
+                <ItemsControl ItemsSource="{{Binding Series}}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <Border BorderBrush="DimGray" BorderThickness="0,0,0,1" Padding="8">
+                                <StackPanel>
+                                    <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
+                                    <TextBlock Text="{{Binding Unit, StringFormat='Units: {{0}}'}}" Foreground="LightGray" />
+{current_value_text}
+{graph_statistics}
+                                </StackPanel>
+                            </Border>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
         </Grid>
     </DockPanel>
 </UserControl>
@@ -2794,12 +2831,14 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError(f'Unknown basic view layout: {basic_layout}')
     if behavior != BEHAVIOR_BASIC and basic_layout != 'text':
         raise ValueError('View layout selection is only available for basic displays.')
-    if graph_type not in ('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'bar', 'custom'):
+    if graph_type not in ('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'cursor-points', 'bar', 'custom'):
         raise ValueError(f'Unknown graph type: {graph_type}')
-    if graph_type != 'none' and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
+    cursor_graph = graph_type in ('cursor-histogram', 'cursor-points')
+    range_behavior = behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE)
+    if graph_type != 'none' and not range_behavior and not (cursor_graph and behavior == BEHAVIOR_CURRENT_VALUE):
         raise ValueError('Time-series graphs require a visible-range behavior.')
-    if graph_type == 'cursor-histogram' and behavior != BEHAVIOR_CURRENT_AND_RANGE:
-        raise ValueError('Cursor histograms require Current value + visible range behavior.')
+    if cursor_graph and behavior != BEHAVIOR_CURRENT_VALUE:
+        raise ValueError('Cursor graphs require Current value at cursor behavior.')
     if overlay_cursor_bars and graph_type != 'cursor-histogram':
         raise ValueError('Cursor bar overlay requires a cursor histogram.')
     if computed_series_specs and graph_type == 'none':
@@ -2894,8 +2933,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         )
 
     if behavior == BEHAVIOR_CURRENT_VALUE:
-        viewmodel_template = VIEWMODEL_TEMPLATE
-        view_template = VIEW_XAML_TEMPLATE
+        viewmodel_template = TIMEBASE_VIEWMODEL_TEMPLATE if cursor_graph else VIEWMODEL_TEMPLATE
+        view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if cursor_graph else VIEW_XAML_TEMPLATE
     elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         viewmodel_template = TIMEBASE_VIEWMODEL_TEMPLATE
         view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if graph_type != 'none' else TIMEBASE_VIEW_XAML_TEMPLATE
@@ -3003,9 +3042,15 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             extra_ctor_assignments=extra_ctor_assignments,
             service_members=service_members,
             parameter_max_count=parameter_max_count,
-            cursor_subscription=CURSOR_SUBSCRIPTION if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
-            cursor_request_method=CURSOR_REQUEST_METHOD if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
-            cursor_result_handler=CURSOR_RESULT_HANDLER if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
+            data_subscription=DATA_SUBSCRIPTION if range_behavior else '',
+            sample_count_members=(
+                SAMPLE_COUNT_MEMBERS.replace('{default_sample_count}', str(sample_count)) if range_behavior else ''
+            ),
+            timebase_request_method=TIMEBASE_REQUEST_METHOD if range_behavior else '',
+            data_result_handler=DATA_RESULT_HANDLER if range_behavior else '',
+            cursor_subscription=CURSOR_SUBSCRIPTION if behavior == BEHAVIOR_CURRENT_AND_RANGE or cursor_graph else '',
+            cursor_request_method=CURSOR_REQUEST_METHOD if behavior == BEHAVIOR_CURRENT_AND_RANGE or cursor_graph else '',
+            cursor_result_handler=CURSOR_RESULT_HANDLER if behavior == BEHAVIOR_CURRENT_AND_RANGE or cursor_graph else '',
             command_properties=command_properties,
             command_initializers=command_initializers,
             command_handlers=command_handlers,
@@ -3017,16 +3062,16 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 '        private static readonly string[] GraphUnits = { '
                 + ', '.join(f'"{escape_csharp_string(unit)}"' for unit in graph_units)
                 + ' };'
-                if behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE) else ''
+                if range_behavior or cursor_graph else ''
             ),
             graph_cursor_method=GRAPH_CURSOR_METHOD if graph_type != 'none' else '',
             default_sample_count=sample_count,
         ),
     }
-    if behavior == BEHAVIOR_CURRENT_VALUE:
+    if behavior == BEHAVIOR_CURRENT_VALUE and not cursor_graph:
         files['ParameterViewModel.cs'] = PARAMETER_VIEWMODEL_TEMPLATE.format(namespace=namespace)
-    elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
-        include_current_value = behavior == BEHAVIOR_CURRENT_AND_RANGE
+    elif range_behavior or cursor_graph:
+        include_current_value = behavior == BEHAVIOR_CURRENT_AND_RANGE or cursor_graph
         files['TimebaseSeriesViewModel.cs'] = TIMEBASE_SERIES_VIEWMODEL_TEMPLATE.format(
             namespace=namespace,
             current_value_field=CURRENT_VALUE_FIELD if include_current_value else '',
@@ -3036,9 +3081,11 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         if graph_type != 'none':
             files['GraphSeries.cs'] = GRAPH_SERIES_TEMPLATE.format(namespace=namespace)
             regex_val = "^[a-zA-Z]+\\\\d{3}$"
-            files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace, regex_value=regex_val).replace(
-                '__GRAPH_TYPE__', graph_type
-            ).replace('__CURSOR_BAR_OVERLAY__', 'true' if overlay_cursor_bars else 'false')
+            files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace).replace(
+                '__REGEX_VALUE__', regex_val
+            ).replace('__GRAPH_TYPE__', graph_type).replace(
+                '__CURSOR_BAR_OVERLAY__', 'true' if overlay_cursor_bars else 'false'
+            )
             files['CustomGraphRenderer.cs'] = CUSTOM_GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
             if computed_series_specs:
                 files['ComputedGraphSeriesFactory.cs'] = COMPUTED_GRAPH_SERIES_TEMPLATE.format(
@@ -3066,7 +3113,18 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 'FontSize="20" FontWeight="Bold" Foreground="White" Margin="10,6" />'
                 if graph_title and graph_type != 'none' else ''
             ),
-            graph_legend_width='240' if show_graph_legend else '0',
+                graph_legend_width='240' if show_graph_legend else '0',
+                graph_legend_visibility='Visible' if show_graph_legend else 'Collapsed',
+                current_value_text=(
+                    CURRENT_VALUE_TEXT if behavior == BEHAVIOR_CURRENT_AND_RANGE or cursor_graph else ''
+                ),
+                graph_statistics=(
+                    '''                                    <TextBlock Text="{Binding Minimum, StringFormat='Minimum: {0:F3}'}" Foreground="White" />
+                                    <TextBlock Text="{Binding Maximum, StringFormat='Maximum: {0:F3}'}" Foreground="White" />
+                                    <TextBlock Text="{Binding Average, StringFormat='Average: {0:F3}'}" Foreground="White" />
+                                    <TextBlock Text="{Binding SampleCount, StringFormat='Samples: {0}'}" Foreground="White" />'''
+                    if range_behavior else ''
+                ),
             basic_content=build_basic_layout_content(
                 basic_layout,
                 f'{name}View',
@@ -3082,7 +3140,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             view_class=f'{name}View',
             viewmodel_class=f'{name}ViewModel',
             uses_time_axis='true' if graph_type == 'time-series' else 'false',
-            current_value_argument=', item.CurrentValue' if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
+            current_value_argument=', item.CurrentValue' if behavior == BEHAVIOR_CURRENT_AND_RANGE or cursor_graph else '',
             computed_series_update=(
                 '            series.AddRange(ComputedGraphSeriesFactory.Create(series).ToList());'
                 if computed_series_specs else ''
@@ -3460,7 +3518,7 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_type_combo = ttk.Combobox(
             advanced_frame,
             textvariable=self.graph_type_var,
-            values=('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'bar', 'custom'),
+            values=('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'cursor-points', 'bar', 'custom'),
             state='disabled',
             width=22,
         )
@@ -4116,9 +4174,17 @@ class PluginGeneratorApp(tk.Tk):
             if hasattr(self, widget_name):
                 getattr(self, widget_name).config(state=tk.NORMAL if not parameters_enabled else tk.DISABLED)
         if hasattr(self, 'graph_type_combo'):
-            graph_enabled = self.behavior_var.get() in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE)
+            behavior = self.behavior_var.get()
+            if behavior == BEHAVIOR_CURRENT_VALUE:
+                graph_choices = ('none', 'cursor-histogram', 'cursor-points')
+            elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
+                graph_choices = ('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom')
+            else:
+                graph_choices = ('none',)
+            self.graph_type_combo.config(values=graph_choices)
+            graph_enabled = len(graph_choices) > 1
             self.graph_type_combo.config(state='readonly' if graph_enabled else 'disabled')
-            if not graph_enabled:
+            if self.graph_type_var.get() not in graph_choices:
                 self.graph_type_var.set('none')
             self.update_graph_states()
 

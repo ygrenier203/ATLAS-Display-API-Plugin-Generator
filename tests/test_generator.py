@@ -703,7 +703,6 @@ class GenerationTests(unittest.TestCase):
         self.assertTrue((project / 'GraphRenderer.cs').exists())
         self.assertTrue((project / 'CustomGraphRenderer.cs').exists())
         self.assertIn('VisualLayer x:Name="GraphVisualLayer"', view)
-        self.assertIn('ItemsSource="{Binding Series}"', view)
         self.assertIn('new GraphSeries(', codebehind)
         self.assertIn('item.Timestamps', codebehind)
         self.assertIn('item.Values', codebehind)
@@ -741,7 +740,7 @@ class GenerationTests(unittest.TestCase):
 
     def test_cursor_histogram_uses_parameter_cursor_values_and_optional_overlay(self):
         target = self.generate(
-            behavior=BEHAVIOR_CURRENT_AND_RANGE,
+            behavior=BEHAVIOR_CURRENT_VALUE,
             library_project=str(LIBRARY_PROJECT),
             atlas_parameters=['vCar:Chassis', 'nEngine:Chassis'],
             graph_type='cursor-histogram',
@@ -750,21 +749,42 @@ class GenerationTests(unittest.TestCase):
         project = target / 'SeparationPlugin'
         renderer = (project / 'GraphRenderer.cs').read_text(encoding='utf-8')
         codebehind = (project / 'SeparationPluginView.xaml.cs').read_text(encoding='utf-8')
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
 
         self.assertIn('GraphType = "cursor-histogram"', renderer)
         self.assertIn('OverlayCursorBars = true', renderer)
-        self.assertIn('DrawCursorHistogram', renderer)
+        self.assertIn('DrawCursorValues', renderer)
         self.assertIn('item.CurrentValue', renderer)
         self.assertIn('item.CurrentValue', codebehind)
         self.assertIn('private static readonly bool UsesTimeAxis = false;', codebehind)
+        self.assertIn('Subscribe<SampleResultSignal>', viewmodel)
+        self.assertNotIn('Subscribe<DataResultSignal>', viewmodel)
+        self.assertNotIn('DataRequestSampleCount', viewmodel)
+        self.assertNotIn('CreateDataRequestSignal', viewmodel)
+        self.assertFalse((project / 'ParameterViewModel.cs').exists())
 
-    def test_cursor_histogram_requires_cursor_and_range_behavior(self):
-        with self.assertRaisesRegex(ValueError, r'Current value \+ visible range'):
+    def test_cursor_histogram_requires_cursor_behavior(self):
+        with self.assertRaisesRegex(ValueError, 'Current value at cursor'):
             self.generate(
                 behavior=BEHAVIOR_VISIBLE_RANGE,
                 library_project=str(LIBRARY_PROJECT),
                 graph_type='cursor-histogram',
             )
+
+    def test_cursor_points_use_the_same_cursor_only_pipeline(self):
+        target = self.generate(
+            behavior=BEHAVIOR_CURRENT_VALUE,
+            library_project=str(LIBRARY_PROJECT),
+            graph_type='cursor-points',
+        )
+        project = target / 'SeparationPlugin'
+        renderer = (project / 'GraphRenderer.cs').read_text(encoding='utf-8')
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+
+        self.assertIn('GraphType = "cursor-points"', renderer)
+        self.assertIn('DrawEllipse', renderer)
+        self.assertIn('UpdateCurrentValue', viewmodel)
+        self.assertNotIn('DataRequestSampleCount', viewmodel)
 
     def test_cursor_bar_overlay_requires_cursor_histogram(self):
         with self.assertRaisesRegex(ValueError, 'requires a cursor histogram'):
