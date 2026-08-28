@@ -67,8 +67,8 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('DrawTimeAxes', renderer)
         self.assertIn('DrawNumericAxes', renderer)
         self.assertIn('DrawValueAndCategoryAxes', renderer)
-        self.assertIn('current.Min(item => item.CurrentValue)', renderer)
-        self.assertIn('current.Max(item => item.CurrentValue)', renderer)
+        self.assertIn('GetCenteredNiceBounds', renderer)
+        self.assertIn('NiceNumber', renderer)
         self.assertIn('new FormattedText(', renderer)
         self.assertIn('var visibleValues = validSeries.SelectMany', renderer)
         self.assertIn('double minimum, double valueRange', renderer)
@@ -93,15 +93,16 @@ class ParameterAndPropertyTests(unittest.TestCase):
             root = Path(directory)
             custom = root / 'CustomDLLs'
             custom.mkdir()
-            (root / 'MyDisplayPlugin.dll').write_bytes(b'')
+            (root / 'MyDisplayCustomPlugin.dll').write_bytes(b'')
+            (root / 'NotAPlugin.dll').write_bytes(b'')
             (root / 'MAT.Atlas.Plugins.NumericDisplay.dll').write_bytes(b'')
-            (custom / 'AnotherPlugin.dll').write_bytes(b'')
+            (custom / 'NestedCustomPlugin.dll').write_bytes(b'')
             (custom / 'System.Reactive.dll').write_bytes(b'')
 
             plugins = list_deployed_plugins(str(root))
 
             self.assertEqual(
-                [str(custom / 'AnotherPlugin.dll'), str(root / 'MyDisplayPlugin.dll')],
+                [str(root / 'MyDisplayCustomPlugin.dll')],
                 plugins,
             )
 

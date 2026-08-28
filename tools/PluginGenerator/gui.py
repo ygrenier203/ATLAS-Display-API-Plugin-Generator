@@ -40,14 +40,12 @@ def list_deployed_plugins(atlas_install_directory):
     root = atlas_install_directory
     if not os.path.isdir(root):
         return []
-    for directory, _, filenames in os.walk(root):
-        for filename in filenames:
-            lowered = filename.lower()
-            if not lowered.endswith('.dll') or lowered.startswith('mat.atlas.plugins.'):
-                continue
-            if lowered.startswith(('system.', 'microsoft.', 'newtonsoft.', 'autofac.')):
-                continue
-            candidates.append(os.path.join(directory, filename))
+    for filename in os.listdir(root):
+        if not filename.lower().endswith('customplugin.dll'):
+            continue
+        path = os.path.join(root, filename)
+        if os.path.isfile(path):
+            candidates.append(path)
     return sorted(set(candidates), key=lambda path: os.path.basename(path).lower())
 
 
@@ -1232,12 +1230,8 @@ namespace {namespace}
                 return;
             }}
 
-            double average = visibleValues.Average();
-            double stdev = Math.Sqrt(visibleValues.Average(v => Math.Pow(v - average, 2)));
-
-            var minimum = Math.Floor(average - 3.5 * stdev);
-            var maximum = Math.Ceiling(average + 3.5 * stdev);
-            var valueRange = Math.Max(double.Epsilon, maximum - minimum);
+            GetCenteredNiceBounds(visibleValues, false, out var minimum, out var maximum);
+            var valueRange = maximum - minimum;
             foreach (var item in validSeries)
             {{
                 this.DrawSeries(drawingContext, extents, item, start, timeRange, minimum, valueRange);
@@ -1315,11 +1309,11 @@ namespace {namespace}
                     !double.IsNaN(point.Y) && !double.IsInfinity(point.Y)).ToList();
             if (points.Count == 0) return;
             var minX = points.Min(point => point.X);
-            var minY = points.Min(point => point.Y);
             var maxX = points.Max(point => point.X);
-            var maxY = points.Max(point => point.Y);
             var rangeX = Math.Max(double.Epsilon, maxX - minX);
-            var rangeY = Math.Max(double.Epsilon, maxY - minY);
+            var yValues = points.Select(point => point.Y).ToList();
+            GetCenteredNiceBounds(yValues, false, out var minY, out var maxY);
+            var rangeY = maxY - minY;
             foreach (var point in points)
             {{
                 var x = ((point.X - minX) / rangeX) * extents.Width;
@@ -1344,16 +1338,20 @@ namespace {namespace}
                 buckets[bucket]++;
             }}
 
-            var maximumCount = Math.Max(1, buckets.Max());
+            GetCenteredNiceBounds(buckets.Select(value => (double)value).ToList(), true,
+                out var countMinimum, out var countMaximum);
             var width = extents.Width / bucketCount;
+            var countRange = countMaximum - countMinimum;
+            var zeroY = extents.Height - (((0d - countMinimum) / countRange) * extents.Height);
             for (var index = 0; index < bucketCount; index++)
             {{
-                var height = (buckets[index] / (double)maximumCount) * extents.Height;
+                var valueY = extents.Height - (((buckets[index] - countMinimum) / countRange) * extents.Height);
                 drawingContext.DrawRectangle(Brushes.DeepSkyBlue, null,
-                    new Rect(index * width, extents.Height - height, Math.Max(1, width - 1), height));
+                    new Rect(index * width, Math.Min(zeroY, valueY), Math.Max(1, width - 1),
+                        Math.Max(1d, Math.Abs(zeroY - valueY))));
             }}
 
-            this.DrawNumericAxes(drawingContext, extents, minimum, values.Max(), 0d, maximumCount);
+            this.DrawNumericAxes(drawingContext, extents, minimum, values.Max(), countMinimum, countMaximum);
         }}
 
         private void DrawBars(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
@@ -1361,9 +1359,8 @@ namespace {namespace}
             var averages = series.Select(item => item.Values
                 .Where(value => !double.IsNaN(value) && !double.IsInfinity(value))
                 .DefaultIfEmpty().Average()).ToList();
-            var minimum = Math.Min(0d, averages.Min());
-            var maximum = Math.Max(0d, averages.Max());
-            var range = Math.Max(double.Epsilon, maximum * 1.5 - minimum);
+            GetCenteredNiceBounds(averages, true, out var minimum, out var maximum);
+            var range = maximum - minimum;
             var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
             var width = extents.Width / Math.Max(1, averages.Count);
             for (var index = 0; index < averages.Count; index++)
@@ -1388,20 +1385,8 @@ namespace {namespace}
                 return;
             }}
 
-            var minimum = Math.Min(0d, current.Min(item => item.CurrentValue));
-            var maximum = Math.Max(0d, current.Max(item => item.CurrentValue));
-            if (Math.Abs(maximum - minimum) < double.Epsilon)
-            {{
-                minimum = -1d;
-                maximum = 1d;
-            }}
-            else
-            {{
-                var padding = (maximum - minimum) * 0.1d;
-                if (minimum < 0d) minimum -= padding;
-                if (maximum > 0d) maximum += padding;
-            }}
-
+            GetCenteredNiceBounds(current.Select(item => item.CurrentValue).ToList(), true,
+                out var minimum, out var maximum);
             var range = maximum - minimum;
             var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
             var slotWidth = OverlayCursorBars ? extents.Width : extents.Width / current.Count;
@@ -1498,6 +1483,37 @@ namespace {namespace}
                 this.DrawTickLabel(drawingContext, label,
                     new Point((index + 0.5d) * slotWidth, extents.Height), true, extents);
             }}
+        }}
+
+        private static void GetCenteredNiceBounds(IReadOnlyList<double> values, bool includeZero,
+            out double minimum, out double maximum)
+        {{
+            var average = values.Average();
+            var maximumDeviation = values.Max(value => Math.Abs(value - average));
+            if (includeZero)
+            {{
+                maximumDeviation = Math.Max(maximumDeviation, Math.Abs(average));
+            }}
+
+            var step = NiceNumber(Math.Max(double.Epsilon, maximumDeviation / 2.5d));
+            var center = Math.Round(average / (step / 2d)) * (step / 2d);
+            while (values.Any(value => Math.Abs(value - center) > 2.5d * step) ||
+                (includeZero && Math.Abs(center) > 2.5d * step))
+            {{
+                step = NiceNumber(step * 1.01d);
+                center = Math.Round(average / (step / 2d)) * (step / 2d);
+            }}
+
+            minimum = center - (2.5d * step);
+            maximum = center + (2.5d * step);
+        }}
+
+        private static double NiceNumber(double value)
+        {{
+            var exponent = Math.Floor(Math.Log10(value));
+            var fraction = value / Math.Pow(10d, exponent);
+            var niceFraction = fraction <= 1d ? 1d : fraction <= 2d ? 2d : fraction <= 5d ? 5d : 10d;
+            return niceFraction * Math.Pow(10d, exponent);
         }}
 
         private void DrawTickLabel(DrawingContext drawingContext, string text, Point anchor,
