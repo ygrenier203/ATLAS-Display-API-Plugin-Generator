@@ -1111,6 +1111,7 @@ using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Media;
+using System.Text.RegularExpressions;
 
 namespace {namespace}
 {{
@@ -1415,9 +1416,16 @@ namespace {namespace}
             var step = Math.Max(1, (int)Math.Ceiling(42d / Math.Max(1d, slotWidth)));
             for (var index = 0; index < categories.Count; index += step)
             {{
-                var label = categories[index].Length > 12
-                    ? categories[index].Substring(0, 12) + "…"
-                    : categories[index];
+                var label = categories[index];
+
+                string pattern =  "{regex_value}";
+                bool isNumbered = Regex.IsMatch(label, pattern);
+
+                if (isNumbered)
+                {{
+                    label = label.Substring(label.Length - 3);
+                }}
+
                 this.DrawTickLabel(drawingContext, label,
                     new Point((index + 0.5d) * slotWidth, extents.Height), true, extents);
             }}
@@ -3028,7 +3036,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         )
         if graph_type != 'none':
             files['GraphSeries.cs'] = GRAPH_SERIES_TEMPLATE.format(namespace=namespace)
-            files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace).replace(
+            regex_val = "^[a-zA-Z]+\\\\d{3}$"
+            files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace, regex_value=regex_val).replace(
                 '__GRAPH_TYPE__', graph_type
             ).replace('__CURSOR_BAR_OVERLAY__', 'true' if overlay_cursor_bars else 'false')
             files['CustomGraphRenderer.cs'] = CUSTOM_GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
