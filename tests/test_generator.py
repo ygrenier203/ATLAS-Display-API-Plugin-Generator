@@ -384,6 +384,13 @@ class ParameterAndPropertyTests(unittest.TestCase):
         self.assertIn('OnCanRenderDisplayChanged(bool canRender)', source)
         self.assertIn('OnDisposeManagedResources()', source)
 
+    def test_parameter_ranges_generate_a_compact_interpolated_loop(self):
+        source = build_lifecycle_hooks(['Wheel[001:004]:Chassis'], False)
+
+        self.assertIn('for (var parameterIndex = 1; parameterIndex <= 4; parameterIndex++)', source)
+        self.assertIn('AddParameterContainer($"Wheel{parameterIndex:000}:Chassis")', source)
+        self.assertEqual(1, source.count('AddParameterContainer'))
+
     def test_session_notification_hooks_preserve_base_behavior(self):
         source = build_session_notification_hooks()
 

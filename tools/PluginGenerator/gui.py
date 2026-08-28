@@ -2721,10 +2721,30 @@ def build_item_members(field_specs):
 def build_lifecycle_hooks(atlas_parameters, include_hooks):
     if not atlas_parameters and not include_hooks:
         return ''
-    registrations = '\n'.join(
-        f'            this.DisplayParameterService.AddParameterContainer("{escape_csharp_string(identifier)}");'
-        for identifier in atlas_parameters
-    )
+    registration_blocks = []
+    range_number = 0
+    for identifier in atlas_parameters:
+        match = re.fullmatch(r'(.*)\[(\d+):(\d+)\](.*)', identifier)
+        if not match:
+            registration_blocks.append(
+                f'            this.DisplayParameterService.AddParameterContainer("{escape_csharp_string(identifier)}");'
+            )
+            continue
+        prefix, start_text, end_text, suffix = match.groups()
+        range_number += 1
+        variable = 'parameterIndex' if range_number == 1 else f'parameterIndex{range_number}'
+        interpolation = (
+            escape_csharp_string(prefix)
+            + f'{{{variable}:{"0" * len(start_text)}}}'
+            + escape_csharp_string(suffix)
+        )
+        registration_blocks.append(
+            f'            for (var {variable} = {int(start_text)}; {variable} <= {int(end_text)}; {variable}++)\n'
+            '            {\n'
+            f'                this.DisplayParameterService.AddParameterContainer($"{interpolation}");\n'
+            '            }'
+        )
+    registrations = '\n'.join(registration_blocks)
     initialised_body = '\n'.join(filter(None, [
         '            base.OnInitialised();',
         registrations,
@@ -2815,9 +2835,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     include_parameters = behavior_uses_parameters(behavior)
     if not isinstance(parameter_max_count, int) or parameter_max_count < 1:
         raise ValueError('Maximum parameter count must be a positive integer.')
+    atlas_parameter_specs = [str(identifier).strip() for identifier in (atlas_parameters or []) if str(identifier).strip()]
     existing_atlas_parameters = set()
     expanded_atlas_parameters = []
-    for identifier in atlas_parameters or []:
+    for identifier in atlas_parameter_specs:
         for expanded_identifier in get_parameter_range(identifier):
             validated_identifier = build_atlas_parameter(expanded_identifier, existing_atlas_parameters)
             expanded_atlas_parameters.append(validated_identifier)
@@ -2956,7 +2977,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     display_property_fields = ''
     display_properties = ''
     atlas_parameter_setup = build_lifecycle_hooks(
-        atlas_parameters if include_parameters else [],
+        atlas_parameter_specs if include_parameters else [],
         include_lifecycle_hooks,
     )
     if display_property_specs:
