@@ -39,11 +39,12 @@ def run(args=None):
 	parser.add_argument('--collection-name', default='Items', help='starter collection property name')
 	parser.add_argument('--item-class', default='ItemViewModel', help='starter collection item class name')
 	parser.add_argument('--item-field', action='append', default=[], help='item field as Name:type; repeat for multiple fields')
-	parser.add_argument('--graph', choices=('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'), default='none', help='graph renderer for visible-range data')
+	parser.add_argument('--graph', choices=('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'bar', 'custom'), default='none', help='graph renderer for visible-range data')
 	parser.add_argument('--computed-series', action='append', default=[], help='computed trace as Name:operation')
 	parser.add_argument('--graph-title', default='', help='title displayed above the graph')
 	parser.add_argument('--graph-unit', action='append', default=[], help='unit for a graph series, in parameter order; repeat as needed')
 	parser.add_argument('--no-graph-legend', action='store_true', help='hide the graph legend and statistics panel')
+	parser.add_argument('--overlay-cursor-bars', action='store_true', help='overlay parameter bars in a cursor histogram')
 	parser.add_argument('--clear-settings', action='store_true', help='clear persisted paths used by the generator and exit')
 	options = parser.parse_args(args)
 
@@ -148,6 +149,7 @@ def run(args=None):
 		graph_title=options.graph_title,
 		graph_units=options.graph_unit,
 		show_graph_legend=not options.no_graph_legend,
+		overlay_cursor_bars=options.overlay_cursor_bars,
 		parameter_max_count=options.max_parameters,
 		workspace_root=default_workspace_root(),
 		library_project=library_project,
