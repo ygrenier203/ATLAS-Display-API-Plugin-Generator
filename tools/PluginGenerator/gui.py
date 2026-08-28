@@ -1186,9 +1186,12 @@ namespace {namespace}
                 return;
             }}
 
-            var minimum = visibleValues.Min();
-            var maximum = visibleValues.Max();
-            var valueRange = Math.Max(double.Epsilon, maximum * 1.5 - minimum);
+            double average = visibleValues.Average();
+            double stdev = Math.Sqrt(visibleValues.Average(v => Math.Pow(v - average, 2)));
+
+            var minimum = Math.Floor(average - 3.5 * stdev);
+            var maximum = Math.Ceiling(average + 3.5 * stdev);
+            var valueRange = Math.Max(double.Epsilon, maximum - minimum);
             foreach (var item in validSeries)
             {{
                 this.DrawSeries(drawingContext, extents, item, start, timeRange, minimum, valueRange);
@@ -1339,9 +1342,12 @@ namespace {namespace}
                 return;
             }}
 
-            var minimum = Math.Min(0d, current.Min(item => item.CurrentValue));
-            var maximum = Math.Max(0d, current.Max(item => item.CurrentValue));
-            var range = Math.Max(double.Epsilon, maximum * 1.8 - minimum);
+            var average = current.Average(item => item.CurrentValue);
+            var stdev = Math.Sqrt(current.Average(item => Math.Pow(item.CurrentValue - average, 2)));
+
+            var minimum = Math.Floor(average - 3.5 * stdev);
+            var maximum = Math.Ceiling(average + 3.5 * stdev);
+            var range = Math.Max(double.Epsilon, maximum - minimum);
             var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
             var slotWidth = OverlayCursorBars ? extents.Width : extents.Width / current.Count;
             for (var index = 0; index < current.Count; index++)
