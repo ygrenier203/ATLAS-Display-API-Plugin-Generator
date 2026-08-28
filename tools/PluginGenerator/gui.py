@@ -2756,6 +2756,17 @@ def build_session_notification_hooks():
         }
 '''
 
+def get_parameter_range(atlas_parameter):
+    # If parameter is named "someText{python formatted range}", extract and return the list of parameters.
+    # For example, if atlas_parameter is "someText[001:003]someMoreText", the function should return ["someText001someMoreText", "someText002someMoreText", "someText003someMoreText"].
+    # Pad based on the number of zeros specified in the range
+    import re
+    match = re.match(r'^(.*)\[(\d+):(\d+)\](.*)$', atlas_parameter)
+    if match:
+        base, start, end, suffix = match.groups()
+        start, end = int(start), int(end)
+        return [f"{base}{i:0{len(match.group(2))}d}{suffix}" for i in range(start, end + 1)]
+    return [atlas_parameter]
 
 def generate_plugin(name, base_out, include_view=True, include_parameters=True, behavior=None, atlas_parameters=None,
                     display_property_specs=None, command_specs=None, parameter_max_count=100, workspace_root=None,
@@ -2775,11 +2786,13 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError('Maximum parameter count must be a positive integer.')
     validated_atlas_parameters = []
     existing_atlas_parameters = set()
+    expanded_atlas_parameters = []
     for identifier in atlas_parameters or []:
-        validated_identifier = build_atlas_parameter(identifier, existing_atlas_parameters)
-        validated_atlas_parameters.append(validated_identifier)
-        existing_atlas_parameters.add(validated_identifier)
-    atlas_parameters = validated_atlas_parameters
+        for expanded_identifier in get_parameter_range(identifier):
+            validated_identifier = build_atlas_parameter(expanded_identifier, existing_atlas_parameters)
+            expanded_atlas_parameters.append(validated_identifier)
+            existing_atlas_parameters.add(validated_identifier)
+    atlas_parameters = expanded_atlas_parameters
     display_property_specs = list(display_property_specs or [])
     command_specs = list(command_specs or [])
     computed_series_specs = list(computed_series_specs or [])
