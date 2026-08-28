@@ -565,6 +565,8 @@ namespace {namespace}
             }}
         }}
 
+{graph_cursor_method}
+
 {command_handlers}
     }}
 }}
@@ -756,6 +758,22 @@ CURRENT_VALUE_UPDATE_METHOD = '''        public void UpdateCurrentValue(double v
         {
             this.CurrentValue = value;
             this.CurrentTimestamp = timestamp;
+        }'''
+
+GRAPH_CURSOR_METHOD = '''        public void MoveCursor(long timestamp)
+        {
+            if (!this.CanRetrieveData ||
+                this.ActiveCompositeSessionContainer?.IsPrimaryCompositeSessionAvailable != true)
+            {
+                return;
+            }
+
+            var primarySession = this.ActiveCompositeSessionContainer.CompositeSessions
+                .FirstOrDefault(session => session.IsPrimary);
+            if (primarySession != null)
+            {
+                this.sessionCursorService.MoveCursor(primarySession, timestamp);
+            }
         }'''
 
 CURRENT_VALUE_TEXT = '''                            <TextBlock Text="{Binding CurrentValue, StringFormat='Current: {0:F3}'}"
@@ -1064,12 +1082,14 @@ namespace {namespace}
 {{
     public sealed class GraphSeries
     {{
-        public GraphSeries(string name, IReadOnlyList<long> timestamps, IReadOnlyList<double> values, Color color)
+        public GraphSeries(string name, IReadOnlyList<long> timestamps, IReadOnlyList<double> values, Color color,
+            double currentValue = double.NaN)
         {{
             this.Name = name;
             this.Timestamps = timestamps;
             this.Values = values;
             this.Color = color;
+            this.CurrentValue = currentValue;
         }}
 
         public string Name {{ get; }}
@@ -1079,12 +1099,15 @@ namespace {namespace}
         public IReadOnlyList<double> Values {{ get; }}
 
         public Color Color {{ get; }}
+
+        public double CurrentValue {{ get; }}
     }}
 }}
 '''
 
 GRAPH_RENDERER_TEMPLATE = '''using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Windows;
 using System.Windows.Media;
@@ -1093,9 +1116,11 @@ namespace {namespace}
 {{
     public sealed class GraphRenderer
     {{
-        private const string GraphType = "__GRAPH_TYPE__";
+        private static readonly string GraphType = "__GRAPH_TYPE__";
+        private static readonly bool OverlayCursorBars = __CURSOR_BAR_OVERLAY__;
 
-        public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
+        public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series,
+            long? viewportStart = null, long? viewportEnd = null)
         {{
             drawingContext.DrawRectangle(Brushes.Transparent, new Pen(Brushes.DimGray, 1), new Rect(extents));
             var gridPen = new Pen(Brushes.DimGray, 0.5);
@@ -1108,6 +1133,12 @@ namespace {namespace}
             }}
             if (extents.Width <= 0 || extents.Height <= 0)
             {{
+                return;
+            }}
+
+            if (GraphType == "cursor-histogram")
+            {{
+                this.DrawCursorHistogram(drawingContext, extents, series);
                 return;
             }}
 
@@ -1141,18 +1172,34 @@ namespace {namespace}
                 return;
             }}
 
-            var start = validSeries.Min(item => item.Timestamps.First());
-            var end = validSeries.Max(item => item.Timestamps.Last());
+            var start = viewportStart ?? validSeries.Min(item => item.Timestamps.First());
+            var end = viewportEnd ?? validSeries.Max(item => item.Timestamps.Last());
             var timeRange = Math.Max(1, end - start);
+            var visibleValues = validSeries.SelectMany(item => Enumerable.Range(
+                    0, Math.Min(item.Timestamps.Count, item.Values.Count))
+                .Where(index => item.Timestamps[index] >= start && item.Timestamps[index] <= end)
+                .Select(index => item.Values[index]))
+                .Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToList();
+            if (visibleValues.Count == 0)
+            {{
+                return;
+            }}
+
+            var minimum = visibleValues.Min();
+            var maximum = visibleValues.Max();
+            var valueRange = Math.Max(double.Epsilon, maximum - minimum);
             foreach (var item in validSeries)
             {{
-                this.DrawSeries(drawingContext, extents, item, start, timeRange);
+                this.DrawSeries(drawingContext, extents, item, start, timeRange, minimum, valueRange);
             }}
+
+            this.DrawTimeAxes(drawingContext, extents, start, end, minimum, maximum);
         }}
 
-        public void DrawCursor(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series, long? timestamp)
+        public void DrawCursor(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series,
+            long? timestamp, long? viewportStart = null, long? viewportEnd = null)
         {{
-            if (!timestamp.HasValue || extents.Width <= 0 || extents.Height <= 0)
+            if (GraphType != "time-series" || !timestamp.HasValue || extents.Width <= 0 || extents.Height <= 0)
             {{
                 return;
             }}
@@ -1163,8 +1210,8 @@ namespace {namespace}
                 return;
             }}
 
-            var start = validSeries.Min(item => item.Timestamps.First());
-            var end = validSeries.Max(item => item.Timestamps.Last());
+            var start = viewportStart ?? validSeries.Min(item => item.Timestamps.First());
+            var end = viewportEnd ?? validSeries.Max(item => item.Timestamps.Last());
             if (timestamp.Value < start || timestamp.Value > end)
             {{
                 return;
@@ -1174,29 +1221,24 @@ namespace {namespace}
             drawingContext.DrawLine(new Pen(Brushes.White, 1), new Point(x, 0), new Point(x, extents.Height));
         }}
 
-        private void DrawSeries(DrawingContext drawingContext, Size extents, GraphSeries series, long start, long timeRange)
+        private void DrawSeries(DrawingContext drawingContext, Size extents, GraphSeries series,
+            long start, long timeRange, double minimum, double valueRange)
         {{
             var count = Math.Min(series.Timestamps.Count, series.Values.Count);
-            var finiteValues = series.Values.Take(count).Where(value => !double.IsNaN(value) && !double.IsInfinity(value)).ToList();
-            if (finiteValues.Count < 2)
-            {{
-                return;
-            }}
-
-            var minimum = finiteValues.Min();
-            var valueRange = Math.Max(double.Epsilon, finiteValues.Max() - minimum);
             var pen = new Pen(new SolidColorBrush(series.Color), 1.5);
             Point? previous = null;
             for (var index = 0; index < count; index++)
             {{
                 var value = series.Values[index];
-                if (double.IsNaN(value) || double.IsInfinity(value))
+                var timestamp = series.Timestamps[index];
+                if (timestamp < start || timestamp > start + timeRange ||
+                    double.IsNaN(value) || double.IsInfinity(value))
                 {{
                     previous = null;
                     continue;
                 }}
 
-                var x = ((series.Timestamps[index] - start) / (double)timeRange) * extents.Width;
+                var x = ((timestamp - start) / (double)timeRange) * extents.Width;
                 var y = extents.Height - (((value - minimum) / valueRange) * extents.Height);
                 var point = new Point(x, y);
                 if (previous.HasValue)
@@ -1224,14 +1266,18 @@ namespace {namespace}
             if (points.Count == 0) return;
             var minX = points.Min(point => point.X);
             var minY = points.Min(point => point.Y);
-            var rangeX = Math.Max(double.Epsilon, points.Max(point => point.X) - minX);
-            var rangeY = Math.Max(double.Epsilon, points.Max(point => point.Y) - minY);
+            var maxX = points.Max(point => point.X);
+            var maxY = points.Max(point => point.Y);
+            var rangeX = Math.Max(double.Epsilon, maxX - minX);
+            var rangeY = Math.Max(double.Epsilon, maxY - minY);
             foreach (var point in points)
             {{
                 var x = ((point.X - minX) / rangeX) * extents.Width;
                 var y = extents.Height - (((point.Y - minY) / rangeY) * extents.Height);
                 drawingContext.DrawEllipse(Brushes.DeepSkyBlue, null, new Point(x, y), 2, 2);
             }}
+
+            this.DrawNumericAxes(drawingContext, extents, minX, maxX, minY, maxY);
         }}
 
         private void DrawHistogram(DrawingContext drawingContext, Size extents, GraphSeries series)
@@ -1256,6 +1302,8 @@ namespace {namespace}
                 drawingContext.DrawRectangle(Brushes.DeepSkyBlue, null,
                     new Rect(index * width, extents.Height - height, Math.Max(1, width - 1), height));
             }}
+
+            this.DrawNumericAxes(drawingContext, extents, minimum, values.Max(), 0d, maximumCount);
         }}
 
         private void DrawBars(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series)
@@ -1263,15 +1311,142 @@ namespace {namespace}
             var averages = series.Select(item => item.Values
                 .Where(value => !double.IsNaN(value) && !double.IsInfinity(value))
                 .DefaultIfEmpty().Average()).ToList();
-            var maximum = Math.Max(double.Epsilon, averages.Select(Math.Abs).DefaultIfEmpty(1).Max());
+            var minimum = Math.Min(0d, averages.Min());
+            var maximum = Math.Max(0d, averages.Max());
+            var range = Math.Max(double.Epsilon, maximum - minimum);
+            var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
             var width = extents.Width / Math.Max(1, averages.Count);
             for (var index = 0; index < averages.Count; index++)
             {{
-                var height = (Math.Abs(averages[index]) / maximum) * extents.Height;
+                var valueY = extents.Height - (((averages[index] - minimum) / range) * extents.Height);
                 drawingContext.DrawRectangle(new SolidColorBrush(series[index].Color), null,
-                    new Rect(index * width, extents.Height - height, Math.Max(1, width - 4), height));
+                    new Rect(index * width, Math.Min(zeroY, valueY), Math.Max(1, width - 4),
+                        Math.Max(1d, Math.Abs(zeroY - valueY))));
+            }}
+
+            this.DrawValueAndCategoryAxes(drawingContext, extents, minimum, maximum,
+                series.Select(item => item.Name).ToList(), false);
+        }}
+
+        private void DrawCursorHistogram(DrawingContext drawingContext, Size extents,
+            IReadOnlyList<GraphSeries> series)
+        {{
+            var current = series.Where(item =>
+                !double.IsNaN(item.CurrentValue) && !double.IsInfinity(item.CurrentValue)).ToList();
+            if (current.Count == 0)
+            {{
+                return;
+            }}
+
+            var minimum = Math.Min(0d, current.Min(item => item.CurrentValue));
+            var maximum = Math.Max(0d, current.Max(item => item.CurrentValue));
+            var range = Math.Max(double.Epsilon, maximum - minimum);
+            var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
+            var slotWidth = OverlayCursorBars ? extents.Width : extents.Width / current.Count;
+            for (var index = 0; index < current.Count; index++)
+            {{
+                var item = current[index];
+                var valueY = extents.Height - (((item.CurrentValue - minimum) / range) * extents.Height);
+                var barWidth = Math.Max(2d, slotWidth * (OverlayCursorBars ? 0.6d : 0.75d));
+                var x = OverlayCursorBars
+                    ? (extents.Width - barWidth) / 2d
+                    : (index * slotWidth) + ((slotWidth - barWidth) / 2d);
+                var color = Color.FromArgb(OverlayCursorBars ? (byte)150 : (byte)230,
+                    item.Color.R, item.Color.G, item.Color.B);
+                drawingContext.DrawRectangle(new SolidColorBrush(color), null,
+                    new Rect(x, Math.Min(zeroY, valueY), barWidth, Math.Max(1d, Math.Abs(zeroY - valueY))));
+            }}
+
+            this.DrawValueAndCategoryAxes(drawingContext, extents, minimum, maximum,
+                current.Select(item => item.Name).ToList(), OverlayCursorBars);
+        }}
+
+        private void DrawTimeAxes(DrawingContext drawingContext, Size extents,
+            long start, long end, double minimum, double maximum)
+        {{
+            for (var tick = 0; tick <= 5; tick++)
+            {{
+                var fraction = tick / 5d;
+                var timestamp = start + (long)((end - start) * fraction);
+                var time = TimeSpan.FromTicks(timestamp / 100);
+                this.DrawTickLabel(drawingContext,
+                    time.ToString(@"hh\\:mm\\:ss\\.fff", CultureInfo.InvariantCulture),
+                    new Point(extents.Width * fraction, extents.Height), true, extents);
+                var value = maximum - ((maximum - minimum) * fraction);
+                this.DrawTickLabel(drawingContext, FormatNumber(value),
+                    new Point(0, extents.Height * fraction), false, extents);
             }}
         }}
+
+        private void DrawNumericAxes(DrawingContext drawingContext, Size extents,
+            double minimumX, double maximumX, double minimumY, double maximumY)
+        {{
+            for (var tick = 0; tick <= 5; tick++)
+            {{
+                var fraction = tick / 5d;
+                this.DrawTickLabel(drawingContext,
+                    FormatNumber(minimumX + ((maximumX - minimumX) * fraction)),
+                    new Point(extents.Width * fraction, extents.Height), true, extents);
+                this.DrawTickLabel(drawingContext,
+                    FormatNumber(maximumY - ((maximumY - minimumY) * fraction)),
+                    new Point(0, extents.Height * fraction), false, extents);
+            }}
+        }}
+
+        private void DrawValueAndCategoryAxes(DrawingContext drawingContext, Size extents,
+            double minimum, double maximum, IReadOnlyList<string> categories, bool overlaid)
+        {{
+            for (var tick = 0; tick <= 5; tick++)
+            {{
+                var fraction = tick / 5d;
+                this.DrawTickLabel(drawingContext,
+                    FormatNumber(maximum - ((maximum - minimum) * fraction)),
+                    new Point(0, extents.Height * fraction), false, extents);
+            }}
+
+            if (overlaid)
+            {{
+                this.DrawTickLabel(drawingContext, "Overlaid parameters",
+                    new Point(extents.Width / 2d, extents.Height), true, extents);
+                return;
+            }}
+
+            var slotWidth = extents.Width / Math.Max(1, categories.Count);
+            var step = Math.Max(1, (int)Math.Ceiling(42d / Math.Max(1d, slotWidth)));
+            for (var index = 0; index < categories.Count; index += step)
+            {{
+                var label = categories[index].Length > 12
+                    ? categories[index].Substring(0, 12) + "…"
+                    : categories[index];
+                this.DrawTickLabel(drawingContext, label,
+                    new Point((index + 0.5d) * slotWidth, extents.Height), true, extents);
+            }}
+        }}
+
+        private void DrawTickLabel(DrawingContext drawingContext, string text, Point anchor,
+            bool horizontal, Size extents)
+        {{
+            var formatted = new FormattedText(
+                text,
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                new Typeface("Segoe UI"),
+                10d,
+                Brushes.White,
+                1d);
+            var x = horizontal
+                ? Math.Max(2d, Math.Min(extents.Width - formatted.Width - 2d,
+                    anchor.X - (formatted.Width / 2d)))
+                : 3d;
+            var y = horizontal
+                ? Math.Max(0d, anchor.Y - formatted.Height - 2d)
+                : Math.Max(0d, Math.Min(extents.Height - formatted.Height,
+                    anchor.Y - (formatted.Height / 2d)));
+            drawingContext.DrawText(formatted, new Point(x, y));
+        }}
+
+        private static string FormatNumber(double value) =>
+            value.ToString("G5", CultureInfo.InvariantCulture);
 
     }}
 }}
@@ -1885,7 +2060,7 @@ SERVICE_DEFINITIONS = {
     'IDataRequestSignalFactory': {'namespace': 'MAT.Atlas.Client.Platform.Data', 'param': 'dataRequestSignalFactory'},
     'ISessionService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionService'},
     'ISessionSummaryService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionSummaryService'},
-    'ISessionCursorService': {'namespace': 'MAT.Atlas.Client.Platform.Sessions', 'param': 'sessionCursorService'},
+    'ISessionCursorService': {'namespace': 'MAT.Atlas.Client.Presentation.Services', 'param': 'sessionCursorService'},
 }
 
 BEHAVIOR_CURRENT_VALUE = 'Current value at cursor'
@@ -2217,18 +2392,21 @@ def build_status_state():
 '''
     return fields, properties
 
-GRAPH_VIEW_CODEBEHIND_TEMPLATE = '''using System.Collections.Generic;
+GRAPH_VIEW_CODEBEHIND_TEMPLATE = '''using System;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 
 namespace {namespace}
 {{
     public partial class {view_class} : UserControl
     {{
+        private static readonly bool UsesTimeAxis = {uses_time_axis};
         private static readonly Color[] Palette =
         {{
             Colors.DeepSkyBlue, Colors.Orange, Colors.LimeGreen, Colors.Magenta,
@@ -2236,12 +2414,21 @@ namespace {namespace}
         }};
         private readonly GraphRenderer graphRenderer = new GraphRenderer();
         private {viewmodel_class} viewModel;
+        private long? loadedStart;
+        private long? loadedEnd;
+        private long? viewportStart;
+        private long? viewportEnd;
+        private bool movingCursor;
 
         public {view_class}()
         {{
             this.InitializeComponent();
             this.DataContextChanged += this.OnDataContextChanged;
             this.SizeChanged += (sender, args) => this.Redraw();
+            this.GraphVisualLayer.MouseLeftButtonDown += this.OnGraphMouseLeftButtonDown;
+            this.GraphVisualLayer.MouseMove += this.OnGraphMouseMove;
+            this.GraphVisualLayer.MouseLeftButtonUp += this.OnGraphMouseLeftButtonUp;
+            this.GraphVisualLayer.MouseWheel += this.OnGraphMouseWheel;
         }}
 
         private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs args)
@@ -2308,16 +2495,135 @@ namespace {namespace}
                 item.Name,
                 item.Timestamps,
                 item.Values,
-                Palette[index % Palette.Length])).ToList() ?? new List<GraphSeries>();
+                Palette[index % Palette.Length]{current_value_argument})).ToList() ?? new List<GraphSeries>();
+            this.UpdateLoadedRange(series);
 {computed_series_update}
-            visual.Draw(context => this.graphRenderer.Draw(context, visual.Extents, series));
+            visual.Draw(context => this.graphRenderer.Draw(
+                context, visual.Extents, series, this.viewportStart, this.viewportEnd));
             var cursorVisual = this.CursorVisualLayer.Visual;
             var cursorTimestamp = this.viewModel?.Series.Select(item => item.CurrentTimestamp).FirstOrDefault(value => value.HasValue);
             cursorVisual.Draw(context => this.graphRenderer.DrawCursor(
                 context,
                 cursorVisual.Extents,
                 series,
-                cursorTimestamp));
+                cursorTimestamp,
+                this.viewportStart,
+                this.viewportEnd));
+        }}
+
+        private void UpdateLoadedRange(IReadOnlyList<GraphSeries> series)
+        {{
+            if (!UsesTimeAxis)
+            {{
+                return;
+            }}
+
+            var ranged = series.Where(item => item.Timestamps.Count > 1).ToList();
+            if (ranged.Count == 0)
+            {{
+                this.loadedStart = this.loadedEnd = this.viewportStart = this.viewportEnd = null;
+                return;
+            }}
+
+            var start = ranged.Min(item => item.Timestamps.First());
+            var end = ranged.Max(item => item.Timestamps.Last());
+            if (this.loadedStart != start || this.loadedEnd != end)
+            {{
+                this.loadedStart = this.viewportStart = start;
+                this.loadedEnd = this.viewportEnd = end;
+            }}
+        }}
+
+        private void OnGraphMouseLeftButtonDown(object sender, MouseButtonEventArgs args)
+        {{
+            if (!UsesTimeAxis)
+            {{
+                return;
+            }}
+
+            this.movingCursor = true;
+            this.GraphVisualLayer.CaptureMouse();
+            this.MoveCursor(args.GetPosition(this.GraphVisualLayer).X);
+            args.Handled = true;
+        }}
+
+        private void OnGraphMouseMove(object sender, MouseEventArgs args)
+        {{
+            if (this.movingCursor && args.LeftButton == MouseButtonState.Pressed)
+            {{
+                this.MoveCursor(args.GetPosition(this.GraphVisualLayer).X);
+                args.Handled = true;
+            }}
+        }}
+
+        private void OnGraphMouseLeftButtonUp(object sender, MouseButtonEventArgs args)
+        {{
+            if (!this.movingCursor)
+            {{
+                return;
+            }}
+
+            this.MoveCursor(args.GetPosition(this.GraphVisualLayer).X);
+            this.movingCursor = false;
+            this.GraphVisualLayer.ReleaseMouseCapture();
+            args.Handled = true;
+        }}
+
+        private void MoveCursor(double x)
+        {{
+            if (!this.viewportStart.HasValue || !this.viewportEnd.HasValue ||
+                this.GraphVisualLayer.ActualWidth <= 0 || this.viewModel == null)
+            {{
+                return;
+            }}
+
+            var fraction = Math.Max(0d, Math.Min(1d, x / this.GraphVisualLayer.ActualWidth));
+            var timestamp = this.viewportStart.Value +
+                (long)((this.viewportEnd.Value - this.viewportStart.Value) * fraction);
+            this.viewModel.MoveCursor(timestamp);
+        }}
+
+        private void OnGraphMouseWheel(object sender, MouseWheelEventArgs args)
+        {{
+            if (!UsesTimeAxis || !this.viewportStart.HasValue || !this.viewportEnd.HasValue ||
+                !this.loadedStart.HasValue || !this.loadedEnd.HasValue)
+            {{
+                return;
+            }}
+
+            var start = this.viewportStart.Value;
+            var end = this.viewportEnd.Value;
+            var span = Math.Max(1L, end - start);
+            if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+            {{
+                var direction = args.Delta > 0 ? -1d : 1d;
+                var offset = (long)(span * 0.1d * direction);
+                this.SetViewport(start + offset, end + offset);
+            }}
+            else
+            {{
+                var x = args.GetPosition(this.GraphVisualLayer).X;
+                var anchor = Math.Max(0d, Math.Min(1d, x / Math.Max(1d, this.GraphVisualLayer.ActualWidth)));
+                var factor = args.Delta > 0 ? 0.8d : 1.25d;
+                var newSpan = Math.Max(1L, (long)(span * factor));
+                var anchorTimestamp = start + (long)(span * anchor);
+                var newStart = anchorTimestamp - (long)(newSpan * anchor);
+                this.SetViewport(newStart, newStart + newSpan);
+            }}
+
+            this.Redraw();
+            args.Handled = true;
+        }}
+
+        private void SetViewport(long start, long end)
+        {{
+            var loadedStart = this.loadedStart.Value;
+            var loadedEnd = this.loadedEnd.Value;
+            var loadedSpan = Math.Max(1L, loadedEnd - loadedStart);
+            var span = Math.Min(loadedSpan, Math.Max(1L, end - start));
+            start = Math.Max(loadedStart, Math.Min(start, loadedEnd - span));
+            this.viewportStart = start;
+            this.viewportEnd = start + span;
         }}
     }}
 }}
@@ -2450,7 +2756,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     include_session_notifications=False, include_item_collection=False,
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
                     item_field_specs=None, graph_type='none', computed_series_specs=None, graph_title='',
-                    graph_units=None, show_graph_legend=True, dll_specs=None, atlas_install_directory=None):
+                    graph_units=None, show_graph_legend=True, overlay_cursor_bars=False,
+                    dll_specs=None, atlas_install_directory=None):
     if not include_view:
         raise ValueError('Generated display plugins require a WPF view.')
     name = normalize_plugin_name(name)
@@ -2481,10 +2788,14 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError(f'Unknown basic view layout: {basic_layout}')
     if behavior != BEHAVIOR_BASIC and basic_layout != 'text':
         raise ValueError('View layout selection is only available for basic displays.')
-    if graph_type not in ('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'):
+    if graph_type not in ('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'bar', 'custom'):
         raise ValueError(f'Unknown graph type: {graph_type}')
     if graph_type != 'none' and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         raise ValueError('Time-series graphs require a visible-range behavior.')
+    if graph_type == 'cursor-histogram' and behavior != BEHAVIOR_CURRENT_AND_RANGE:
+        raise ValueError('Cursor histograms require Current value + visible range behavior.')
+    if overlay_cursor_bars and graph_type != 'cursor-histogram':
+        raise ValueError('Cursor bar overlay requires a cursor histogram.')
     if computed_series_specs and graph_type == 'none':
         raise ValueError('Computed series require a graph.')
     if include_item_collection and basic_layout == 'text':
@@ -2605,6 +2916,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
 
     # ISignalBus/IDataRequestSignalFactory are always injected by ParameterSampleDisplayViewModelBase.
     requested_services = list(service_names or [])
+    if graph_type != 'none' and 'ISessionCursorService' not in requested_services:
+        requested_services.append('ISessionCursorService')
     if behavior == BEHAVIOR_BASIC and any(spec.get('generate_log', False) for spec in command_specs):
         if 'ILogger' not in requested_services:
             requested_services.append('ILogger')
@@ -2700,6 +3013,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 + ' };'
                 if behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE) else ''
             ),
+            graph_cursor_method=GRAPH_CURSOR_METHOD if graph_type != 'none' else '',
         ),
     }
     if behavior == BEHAVIOR_CURRENT_VALUE:
@@ -2716,7 +3030,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             files['GraphSeries.cs'] = GRAPH_SERIES_TEMPLATE.format(namespace=namespace)
             files['GraphRenderer.cs'] = GRAPH_RENDERER_TEMPLATE.format(namespace=namespace).replace(
                 '__GRAPH_TYPE__', graph_type
-            )
+            ).replace('__CURSOR_BAR_OVERLAY__', 'true' if overlay_cursor_bars else 'false')
             files['CustomGraphRenderer.cs'] = CUSTOM_GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
             if computed_series_specs:
                 files['ComputedGraphSeriesFactory.cs'] = COMPUTED_GRAPH_SERIES_TEMPLATE.format(
@@ -2761,6 +3075,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             namespace=namespace,
             view_class=f'{name}View',
             viewmodel_class=f'{name}ViewModel',
+            uses_time_axis='true' if graph_type == 'time-series' else 'false',
+            current_value_argument=', item.CurrentValue' if behavior == BEHAVIOR_CURRENT_AND_RANGE else '',
             computed_series_update=(
                 '            series.AddRange(ComputedGraphSeriesFactory.Create(series).ToList());'
                 if computed_series_specs else ''
@@ -3129,7 +3445,7 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_type_combo = ttk.Combobox(
             advanced_frame,
             textvariable=self.graph_type_var,
-            values=('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom'),
+            values=('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'bar', 'custom'),
             state='disabled',
             width=22,
         )
@@ -3154,6 +3470,13 @@ class PluginGeneratorApp(tk.Tk):
             variable=self.graph_legend_var,
         )
         self.graph_legend_checkbutton.grid(row=14, column=0, columnspan=2, sticky='w', pady=4)
+        self.overlay_cursor_bars_var = tk.BooleanVar(value=False)
+        self.overlay_cursor_bars_checkbutton = tk.Checkbutton(
+            advanced_frame,
+            text='Overlay parameter bars (cursor histogram)',
+            variable=self.overlay_cursor_bars_var,
+        )
+        self.overlay_cursor_bars_checkbutton.grid(row=15, column=0, columnspan=2, sticky='w', pady=4)
         self.update_graph_states()
         
         # === Action Buttons ===
@@ -3747,6 +4070,7 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_title_var.set('')
         self.graph_units_var.set('')
         self.graph_legend_var.set(True)
+        self.overlay_cursor_bars_var.set(False)
         self.update_graph_states()
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
@@ -3790,6 +4114,10 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_units_entry.config(state=state)
         self.computed_series_entry.config(state=state)
         self.graph_legend_checkbutton.config(state=state)
+        overlay_state = tk.NORMAL if self.graph_type_var.get() == 'cursor-histogram' else tk.DISABLED
+        self.overlay_cursor_bars_checkbutton.config(state=overlay_state)
+        if overlay_state == tk.DISABLED:
+            self.overlay_cursor_bars_var.set(False)
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output, library, icon, and ATLAS paths?'):
@@ -3824,6 +4152,7 @@ class PluginGeneratorApp(tk.Tk):
             'graph_title': self.graph_title_var.get(),
             'graph_units': self.graph_units_var.get(),
             'show_graph_legend': self.graph_legend_var.get(),
+            'overlay_cursor_bars': self.overlay_cursor_bars_var.get(),
         }
 
     def apply_preset_configuration(self, configuration):
@@ -3855,6 +4184,7 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_title_var.set(configuration.get('graph_title', ''))
         self.graph_units_var.set(configuration.get('graph_units', ''))
         self.graph_legend_var.set(configuration.get('show_graph_legend', True))
+        self.overlay_cursor_bars_var.set(configuration.get('overlay_cursor_bars', False))
         self.update_behavior_states()
 
     def save_preset_dialog(self):
@@ -3964,6 +4294,7 @@ class PluginGeneratorApp(tk.Tk):
                 graph_title=self.graph_title_var.get(),
                 graph_units=graph_units,
                 show_graph_legend=self.graph_legend_var.get(),
+                overlay_cursor_bars=self.overlay_cursor_bars_var.get(),
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,

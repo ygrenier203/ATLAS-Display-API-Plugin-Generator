@@ -593,6 +593,12 @@ A graph requires visible-range or current-and-range behavior.
 
 Generated types are `time-series`, `scatter`, `histogram`, `bar`, and `custom`. They use native WPF `DrawingContext` and `VisualLayer`; no external chart package is required. Use `custom` for specialized drawing without changing the request pipeline.
 
+`cursor-histogram` is also available for **Current value + visible range** displays. Its X categories are the selected parameters and its Y values are their current cursor values. Bars can be side by side or overlaid; overlaid colors are translucent and the legend identifies each parameter.
+
+Standard renderers draw scale labels appropriate to their data: time-of-day timestamps and a shared numeric Y scale for time series, numeric X/Y scales for scatter and distribution histograms, and parameter categories plus numeric Y scales for bar charts. A `custom` renderer owns its own scale because the generator cannot infer the meaning of arbitrary custom geometry.
+
+Generated time-series interaction uses left-click/drag to call `ISessionCursorService.MoveCursor`, mouse-wheel to zoom locally around the pointer, and Shift+mouse-wheel to pan within the currently loaded samples. The public material documents cursor mutation but no supported timebase setter, so local zoom/pan intentionally does not invent or call an unsupported global ATLAS time-range API.
+
 ## Symptom-to-layer matrix
 
 | Symptom | Request | Result | ViewModel | Render/XAML |
