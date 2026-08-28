@@ -48,7 +48,7 @@ To run the icon maker by itself:
 python -m tools.PluginGenerator.icon_maker
 ```
 
-The GUI enables **Build and validate after generation** by default. Validation restores packages and builds the generated Debug/x64 solution, reports compiler output when it fails, and explicitly disables plugin deployment during the validation build. Uncheck it when working offline or before the private `mat-docs` NuGet feed has been configured. The CLI equivalent is `--build`.
+The GUI offers **Build, validate, and deploy after generation**. It restores packages and builds the generated Debug/x64 solution with the same deployment-enabled project defaults used by Visual Studio, so a successful build runs the generated deployment script and copies the plugin DLL to the configured ATLAS installation. Windows may request administrator approval. Uncheck it when working offline or before the private `mat-docs` NuGet feed has been configured. The CLI equivalent is `--build`.
 
 To reset the persisted paths for testing first-use behavior:
 

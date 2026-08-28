@@ -2258,7 +2258,6 @@ def build_generated_plugin(target, build_tool=None):
             '--configuration',
             'Debug',
             '-p:Platform=x64',
-            '-p:DeployAtlasPlugin=false',
         ]
     elif tool_kind == 'msbuild':
         command = [
@@ -2267,7 +2266,6 @@ def build_generated_plugin(target, build_tool=None):
             '-restore',
             '-p:Configuration=Debug',
             '-p:Platform=x64',
-            '-p:DeployAtlasPlugin=false',
         ]
     else:
         raise ValueError(f'Unknown build tool: {tool_kind}')
@@ -3593,7 +3591,7 @@ class PluginGeneratorApp(tk.Tk):
         self.build_after_generation_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
             advanced_frame,
-            text='Build and validate after generation',
+            text='Build, validate, and deploy after generation',
             variable=self.build_after_generation_var,
         ).grid(row=2, column=0, columnspan=2, sticky='w', pady=4)
 

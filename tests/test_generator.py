@@ -1060,7 +1060,7 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('this.MakeDataRequests(true, true);', viewmodel)
 
     @patch('tools.PluginGenerator.gui.subprocess.run')
-    def test_build_validation_uses_dotnet_without_deploying(self, run):
+    def test_build_validation_uses_visual_studio_deployment_default(self, run):
         run.return_value.returncode = 0
         run.return_value.stdout = 'Build succeeded.'
         run.return_value.stderr = ''
@@ -1072,7 +1072,7 @@ class GenerationTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(['dotnet.exe', 'build'], command[:2])
         self.assertIn('-p:Platform=x64', command)
-        self.assertIn('-p:DeployAtlasPlugin=false', command)
+        self.assertNotIn('-p:DeployAtlasPlugin=false', command)
 
     @patch('tools.PluginGenerator.gui.subprocess.run')
     def test_build_validation_reports_compiler_output(self, run):
