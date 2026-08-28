@@ -2791,6 +2791,14 @@ def get_parameter_range(atlas_parameter):
         return [f"{base}{i:0{len(match.group(2))}d}{suffix}" for i in range(start, end + 1)]
     return [atlas_parameter]
 
+
+def count_parameter_entries(text):
+    return sum(
+        len(get_parameter_range(line.strip()))
+        for line in (text or '').splitlines()
+        if line.strip()
+    )
+
 def generate_plugin(name, base_out, include_view=True, include_parameters=True, behavior=None, atlas_parameters=None,
                     display_property_specs=None, command_specs=None, parameter_max_count=100, workspace_root=None,
                     description=None, library_project=None, icon_path=None, service_names=None,
@@ -3365,6 +3373,7 @@ class PluginGeneratorApp(tk.Tk):
         ).pack(anchor='w', pady=(0, 4))
         self.atlas_parameter_text = tk.Text(atlas_frame, height=4, wrap=tk.WORD)
         self.atlas_parameter_text.pack(fill=tk.X)
+        self.atlas_parameter_text.bind('<KeyRelease>', self.infer_parameter_max_count)
         self.update_behavior_states()
 
         # === Display Properties ===
@@ -4151,6 +4160,9 @@ class PluginGeneratorApp(tk.Tk):
     def update_behavior_states(self):
         # Data behaviors inject these services through DisplayPluginLibrary base classes.
         parameters_enabled = behavior_uses_parameters(self.behavior_var.get())
+        if hasattr(self, 'sample_count_entry'):
+            uses_samples = self.behavior_var.get() in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE)
+            self.sample_count_entry.config(state=tk.NORMAL if uses_samples else tk.DISABLED)
         for service_name in ('ILogger', 'ISignalBus', 'IDataRequestSignalFactory'):
             checkbutton = self.service_checkbuttons[service_name]
             if parameters_enabled:
@@ -4187,6 +4199,12 @@ class PluginGeneratorApp(tk.Tk):
             if self.graph_type_var.get() not in graph_choices:
                 self.graph_type_var.set('none')
             self.update_graph_states()
+
+    def infer_parameter_max_count(self, _event=None):
+        if not hasattr(self, 'atlas_parameter_text') or not hasattr(self, 'parameter_max_var'):
+            return
+        count = count_parameter_entries(self.atlas_parameter_text.get('1.0', tk.END))
+        self.parameter_max_var.set(str(max(1, count)))
 
     def update_graph_states(self):
         if not hasattr(self, 'graph_title_entry'):

@@ -32,6 +32,7 @@ from tools.PluginGenerator.gui import (
     build_display_property_field,
     build_display_property_spec,
     build_dll_spec,
+    count_parameter_entries,
     list_deployed_plugins,
     plugin_cleanup_files,
     remove_dll_specs,
@@ -50,6 +51,9 @@ ICON = ROOT / 'icon.png'
 
 
 class ParameterAndPropertyTests(unittest.TestCase):
+    def test_parameter_count_expands_ranges(self):
+        self.assertEqual(5, count_parameter_entries('vCar:Chassis\nWheel[001:004]:Chassis\n'))
+
     def test_graph_renderer_scaffold_uses_native_wpf_drawing(self):
         renderer = GRAPH_RENDERER_TEMPLATE.format(namespace='DemoPlugin')
         series = GRAPH_SERIES_TEMPLATE.format(namespace='DemoPlugin')
