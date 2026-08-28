@@ -800,6 +800,28 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('UpdateCurrentValue', viewmodel)
         self.assertNotIn('DataRequestSampleCount', viewmodel)
 
+    def test_compare_sessions_can_generate_cursor_histogram(self):
+        target = self.generate(
+            behavior=BEHAVIOR_COMPARE_SESSIONS,
+            library_project=str(LIBRARY_PROJECT),
+            atlas_parameters=['vCar:Chassis'],
+            graph_type='cursor-histogram',
+            graph_units=['km/h'],
+        )
+        project = target / 'SeparationPlugin'
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+        view = (project / 'SeparationPluginView.xaml').read_text(encoding='utf-8')
+
+        self.assertIn('CompositeSampleResultSignal', viewmodel)
+        self.assertIn('ObservableCollection<TimebaseSeriesViewModel> Series', viewmodel)
+        self.assertIn('this.SyncGraphSeries();', viewmodel)
+        self.assertIn('$"{row.Name} — {sessionValue.SessionName}"', viewmodel)
+        self.assertIn('GraphUnits = { "km/h" };', viewmodel)
+        self.assertIn('VisualLayer x:Name="GraphVisualLayer"', view)
+        self.assertTrue((project / 'CompareRowViewModel.cs').exists())
+        self.assertTrue((project / 'TimebaseSeriesViewModel.cs').exists())
+        ET.parse(project / 'SeparationPluginView.xaml')
+
     def test_cursor_bar_overlay_requires_cursor_histogram(self):
         with self.assertRaisesRegex(ValueError, 'requires a cursor histogram'):
             self.generate(

@@ -824,6 +824,7 @@ namespace {namespace}
         [Browsable(false)]
         public ObservableCollection<CompareRowViewModel> Rows {{ get; }} =
             new ObservableCollection<CompareRowViewModel>();
+{compare_graph_members}
 
 {status_state_properties}{display_properties}
 {command_properties}
@@ -886,6 +887,7 @@ namespace {namespace}
                     {{
                         row.Update(update.SessionKey, update.Value);
                     }}
+{compare_graph_sync_call}
                 }});
             }}
             catch (Exception exception)
@@ -912,11 +914,43 @@ namespace {namespace}
                 row.SyncSessions(sessions);
                 this.Rows.Add(row);
             }}
+{compare_graph_sync_call}
         }}
 
+{compare_graph_sync_method}
 {command_handlers}
     }}
 }}
+'''
+
+COMPARE_GRAPH_MEMBERS = '''
+        private static readonly string[] GraphUnits = { __GRAPH_UNITS__ };
+
+        [Browsable(false)]
+        public ObservableCollection<TimebaseSeriesViewModel> Series { get; } =
+            new ObservableCollection<TimebaseSeriesViewModel>();
+'''
+
+COMPARE_GRAPH_SYNC_METHOD = '''        private void SyncGraphSeries()
+        {
+            this.Series.Clear();
+            var parameterIndex = 0;
+            foreach (var row in this.Rows)
+            {
+                var unit = parameterIndex < GraphUnits.Length ? GraphUnits[parameterIndex] : string.Empty;
+                foreach (var sessionValue in row.SessionValues)
+                {
+                    var series = new TimebaseSeriesViewModel(
+                        row.ParameterIdentifier,
+                        $"{row.Name} — {sessionValue.SessionName}",
+                        unit);
+                    series.UpdateCurrentValue(sessionValue.Value, 0L);
+                    this.Series.Add(series);
+                }
+
+                parameterIndex++;
+            }
+        }
 '''
 
 COMPARE_ROW_VIEWMODEL_TEMPLATE = '''using System;
@@ -2911,10 +2945,12 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError(f'Unknown graph type: {graph_type}')
     cursor_graph = graph_type in ('cursor-histogram', 'cursor-points')
     range_behavior = behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE)
-    if graph_type != 'none' and not range_behavior and not (cursor_graph and behavior == BEHAVIOR_CURRENT_VALUE):
+    if graph_type != 'none' and not range_behavior and not (
+        cursor_graph and behavior in (BEHAVIOR_CURRENT_VALUE, BEHAVIOR_COMPARE_SESSIONS)
+    ):
         raise ValueError('Time-series graphs require a visible-range behavior.')
-    if cursor_graph and behavior != BEHAVIOR_CURRENT_VALUE:
-        raise ValueError('Cursor graphs require Current value at cursor behavior.')
+    if cursor_graph and behavior not in (BEHAVIOR_CURRENT_VALUE, BEHAVIOR_COMPARE_SESSIONS):
+        raise ValueError('Cursor graphs require Current value at cursor or Compare sessions behavior.')
     if overlay_cursor_bars and graph_type != 'cursor-histogram':
         raise ValueError('Cursor bar overlay requires a cursor histogram.')
     if computed_series_specs and graph_type == 'none':
@@ -3016,7 +3052,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if graph_type != 'none' else TIMEBASE_VIEW_XAML_TEMPLATE
     elif behavior == BEHAVIOR_COMPARE_SESSIONS:
         viewmodel_template = COMPARE_VIEWMODEL_TEMPLATE
-        view_template = COMPARE_VIEW_XAML_TEMPLATE
+        view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if cursor_graph else COMPARE_VIEW_XAML_TEMPLATE
     else:
         viewmodel_template = BASIC_VIEWMODEL_TEMPLATE
         view_template = BASIC_VIEW_XAML_TEMPLATE
@@ -3141,6 +3177,19 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 if range_behavior or cursor_graph else ''
             ),
             graph_cursor_method=GRAPH_CURSOR_METHOD if graph_type != 'none' else '',
+            compare_graph_members=(
+                COMPARE_GRAPH_MEMBERS.replace(
+                    '__GRAPH_UNITS__',
+                    ', '.join(f'"{escape_csharp_string(unit)}"' for unit in graph_units),
+                ) if behavior == BEHAVIOR_COMPARE_SESSIONS and cursor_graph else ''
+            ),
+            compare_graph_sync_call=(
+                '                    this.SyncGraphSeries();'
+                if behavior == BEHAVIOR_COMPARE_SESSIONS and cursor_graph else ''
+            ),
+            compare_graph_sync_method=(
+                COMPARE_GRAPH_SYNC_METHOD if behavior == BEHAVIOR_COMPARE_SESSIONS and cursor_graph else ''
+            ),
             default_sample_count=sample_count,
         ),
     }
@@ -3168,7 +3217,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     namespace=namespace,
                     computed_blocks=build_computed_series_blocks(computed_series_specs),
                 )
-    elif behavior == BEHAVIOR_COMPARE_SESSIONS:
+    if behavior == BEHAVIOR_COMPARE_SESSIONS:
         files['CompareRowViewModel.cs'] = COMPARE_ROW_VIEWMODEL_TEMPLATE.format(namespace=namespace)
         files['CompareSessionValueViewModel.cs'] = COMPARE_SESSION_VALUE_VIEWMODEL_TEMPLATE.format(
             namespace=namespace,
@@ -4259,6 +4308,8 @@ class PluginGeneratorApp(tk.Tk):
                 graph_choices = ('none', 'cursor-histogram', 'cursor-points')
             elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
                 graph_choices = ('none', 'time-series', 'scatter', 'histogram', 'bar', 'custom')
+            elif behavior == BEHAVIOR_COMPARE_SESSIONS:
+                graph_choices = ('none', 'cursor-histogram', 'cursor-points')
             else:
                 graph_choices = ('none',)
             self.graph_type_combo.config(values=graph_choices)

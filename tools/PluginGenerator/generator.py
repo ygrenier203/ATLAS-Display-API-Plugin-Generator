@@ -101,8 +101,8 @@ def run(args=None):
 		parser.error('--item-collection requires --behavior basic.')
 	if options.layout != 'text' and behavior != BEHAVIOR_BASIC:
 		parser.error('--layout requires --behavior basic.')
-	if options.graph in ('cursor-histogram', 'cursor-points') and behavior != BEHAVIOR_CURRENT_VALUE:
-		parser.error('--graph cursor-histogram and cursor-points require --behavior current-value.')
+	if options.graph in ('cursor-histogram', 'cursor-points') and behavior not in (BEHAVIOR_CURRENT_VALUE, BEHAVIOR_COMPARE_SESSIONS):
+		parser.error('--graph cursor-histogram and cursor-points require --behavior current-value or compare-sessions.')
 	if options.graph not in ('none', 'cursor-histogram', 'cursor-points') and behavior not in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
 		parser.error('--graph requires a visible-range behavior.')
 	if not icon_path:
