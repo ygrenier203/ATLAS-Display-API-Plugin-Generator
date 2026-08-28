@@ -1188,7 +1188,7 @@ namespace {namespace}
 
             var minimum = visibleValues.Min();
             var maximum = visibleValues.Max();
-            var valueRange = Math.Max(double.Epsilon, maximum - minimum);
+            var valueRange = Math.Max(double.Epsilon, maximum * 1.5 - minimum);
             foreach (var item in validSeries)
             {{
                 this.DrawSeries(drawingContext, extents, item, start, timeRange, minimum, valueRange);
@@ -1314,7 +1314,7 @@ namespace {namespace}
                 .DefaultIfEmpty().Average()).ToList();
             var minimum = Math.Min(0d, averages.Min());
             var maximum = Math.Max(0d, averages.Max());
-            var range = Math.Max(double.Epsilon, maximum - minimum);
+            var range = Math.Max(double.Epsilon, maximum * 1.5 - minimum);
             var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
             var width = extents.Width / Math.Max(1, averages.Count);
             for (var index = 0; index < averages.Count; index++)
