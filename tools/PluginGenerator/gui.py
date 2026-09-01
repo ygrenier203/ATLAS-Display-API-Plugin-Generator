@@ -3724,8 +3724,22 @@ class PluginGeneratorApp(tk.Tk):
         tk.Button(command_button_frame, text='Remove', command=self.remove_selected_command).pack(side=tk.LEFT, padx=4)
         
         # === Advanced Settings ===
-        advanced_frame = tk.LabelFrame(scrollable_frame, text='Advanced Settings', padx=8, pady=8)
-        advanced_frame.pack(fill=tk.X, pady=8)
+        advanced_section = tk.Frame(scrollable_frame)
+        advanced_section.pack(fill=tk.X, pady=8)
+        advanced_frame = tk.LabelFrame(advanced_section, text='Advanced Settings', padx=8, pady=8)
+        self.advanced_expanded = False
+
+        def toggle_advanced():
+            self.advanced_expanded = not self.advanced_expanded
+            if self.advanced_expanded:
+                advanced_frame.pack(fill=tk.X, pady=(4, 0))
+                advanced_toggle.config(text='▼ Advanced Settings')
+            else:
+                advanced_frame.pack_forget()
+                advanced_toggle.config(text='▶ Advanced Settings')
+
+        advanced_toggle = tk.Button(advanced_section, text='▶ Advanced Settings', command=toggle_advanced, anchor='w')
+        advanced_toggle.pack(fill=tk.X)
         
         tk.Label(advanced_frame, text='Maximum parameters:').grid(row=0, column=0, sticky='w', pady=6)
         self.parameter_max_var = tk.StringVar(value='100')

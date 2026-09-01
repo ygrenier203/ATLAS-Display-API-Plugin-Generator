@@ -8,6 +8,7 @@ ICON_SYMBOLS = (
     'checkered-flag', 'steering-wheel', 'tyre', 'stopwatch', 'race-car',
     'helmet', 'trophy', 'pit-lane', 'track-map', 'brake-disc',
     'suspension', 'engine', 'fuel', 'gear', 'lap-delta',
+    'battery', 'lightning', 'telemetry', 'damper',
 )
 
 
@@ -78,7 +79,14 @@ def render_icon_pixels(size, background, foreground, symbol):
         raise ValueError(f'Unknown icon symbol: {symbol}')
     background = parse_hex_color(background) if isinstance(background, str) else tuple(background)
     foreground = parse_hex_color(foreground) if isinstance(foreground, str) else tuple(foreground)
-    pixels = bytearray(bytes(background) * (size * size))
+    pixels = bytearray(size * size * 4)
+    for y in range(size):
+        factor = 1.12 - (0.24 * (y / max(1, size - 1)))
+        row_color = tuple(min(255, max(0, int(channel * factor))) for channel in background[:3]) + (background[3],)
+        for x in range(size):
+            vignette = 1.0 - (0.16 * abs((x / max(1, size - 1)) - 0.5) * 2)
+            color = tuple(int(channel * vignette) for channel in row_color[:3]) + (row_color[3],)
+            _set_pixel(pixels, size, x, y, color)
     margin = size // 5
     thickness = max(2, size // 24)
     middle = size // 2
@@ -203,10 +211,31 @@ def render_icon_pixels(size, background, foreground, symbol):
         for start, end in (((middle, margin), (middle, margin // 2)), ((middle, size - margin), (middle, size - margin // 2)),
                            ((margin, middle), (margin // 2, middle)), ((size - margin, middle), (size - margin // 2, middle))):
             _line(pixels, size, start, end, foreground, thickness)
-    else:  # lap-delta
+    elif symbol == 'lap-delta':
         _line(pixels, size, (margin, middle), (size - margin, middle), foreground, thickness)
         _line(pixels, size, (middle, margin), (middle, size - margin), foreground, thickness)
         _line(pixels, size, (margin, size - margin), (size - margin, margin), foreground, thickness)
+    elif symbol == 'battery':
+        _rectangle(pixels, size, margin, size // 3, size - margin, size * 2 // 3, foreground)
+        _rectangle(pixels, size, size - margin, middle - thickness, size - margin // 2, middle + thickness, foreground)
+        _rectangle(pixels, size, margin + thickness, size // 3 + thickness,
+                   size * 3 // 5, size * 2 // 3 - thickness, background)
+    elif symbol == 'lightning':
+        points = ((middle, margin), (size // 3, middle), (middle, middle),
+                  (size * 2 // 5, size - margin), (size * 2 // 3, middle), (middle, middle))
+        for start, end in zip(points, points[1:]):
+            _line(pixels, size, start, end, foreground, thickness * 2)
+    elif symbol == 'telemetry':
+        for index, height in enumerate((2, 5, 3, 7, 4)):
+            left = margin + index * max(2, (size - margin * 2) // 5)
+            _rectangle(pixels, size, left, size - margin - height * max(1, size // 16),
+                       left + thickness * 2, size - margin, foreground)
+    else:  # damper
+        _line(pixels, size, (middle, margin), (middle, size // 3), foreground, thickness)
+        _rectangle(pixels, size, size // 3, size // 3, size * 2 // 3, size * 2 // 3, foreground)
+        _rectangle(pixels, size, size // 3 + thickness, size // 3 + thickness,
+                   size * 2 // 3 - thickness, size * 2 // 3 - thickness, background)
+        _line(pixels, size, (middle, size * 2 // 3), (middle, size - margin), foreground, thickness)
     return bytes(pixels)
 
 
@@ -215,7 +244,7 @@ def _png_chunk(chunk_type, data):
     return struct.pack('>I', len(data)) + body + struct.pack('>I', binascii.crc32(body) & 0xFFFFFFFF)
 
 
-def create_icon_png(path, size=16, background='#20242B', foreground='#27B5E8', symbol='graph'):
+def create_icon_png(path, size=64, background='#20242B', foreground='#27B5E8', symbol='graph'):
     pixels = render_icon_pixels(size, background, foreground, symbol)
     rows = b''.join(b'\x00' + pixels[offset:offset + (size * 4)] for offset in range(0, len(pixels), size * 4))
     png = (
@@ -242,7 +271,6 @@ def open_icon_maker(parent, initial_directory='', save_path=None, on_saved=None)
     background_var = tk.StringVar(value='#20242B')
     foreground_var = tk.StringVar(value='#27B5E8')
     symbol_var = tk.StringVar(value='graph')
-    size_var = tk.StringVar(value='16')
     result = {}
 
     canvas = tk.Canvas(dialog, width=192, height=192, highlightthickness=1, highlightbackground='#777777')
@@ -341,9 +369,8 @@ def open_icon_maker(parent, initial_directory='', save_path=None, on_saved=None)
     tk.Entry(dialog, textvariable=foreground_var, width=14).grid(row=2, column=2, sticky='w', padx=8)
     tk.Button(dialog, text='Choose...', command=lambda: choose_color(foreground_var)).grid(row=2, column=3, padx=8)
 
-    tk.Label(dialog, text='PNG size:').grid(row=3, column=1, sticky='w', padx=8, pady=4)
-    ttk.Combobox(dialog, textvariable=size_var, values=('16', '24', '32', '64'), state='readonly', width=10).grid(
-        row=3, column=2, sticky='w', padx=8
+    tk.Label(dialog, text='Output: 64×64 PNG', foreground='#666666').grid(
+        row=3, column=1, columnspan=2, sticky='w', padx=8, pady=4
     )
 
     def save_and_use():
@@ -365,7 +392,7 @@ def open_icon_maker(parent, initial_directory='', save_path=None, on_saved=None)
             )
         if not path:
             return
-        create_icon_png(path, int(size_var.get()), background_var.get(), foreground_var.get(), symbol_var.get())
+        create_icon_png(path, 64, background_var.get(), foreground_var.get(), symbol_var.get())
         result['path'] = path
         if on_saved:
             on_saved(path)

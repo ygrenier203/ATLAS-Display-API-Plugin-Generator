@@ -51,7 +51,7 @@ class IconMakerTests(unittest.TestCase):
             create_icon_png(path, symbol='checkered-flag')
             data = path.read_bytes()
 
-            self.assertEqual((16, 16), struct.unpack('>II', data[16:24]))
+            self.assertEqual((64, 64), struct.unpack('>II', data[16:24]))
 
     def test_unknown_symbol_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'Unknown icon symbol'):

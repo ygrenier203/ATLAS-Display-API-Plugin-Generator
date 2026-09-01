@@ -40,7 +40,7 @@ The GUI provides Browse controls for the output folder, library project, PNG ico
 
 The **Deployed Plugins** manager lists only `*CustomPlugin.dll` files directly inside the configured ATLAS installation folder. Select one or more plugins, choose **Remove Selected...**, review the exact DLL and matching sidecar files (`.pdb`, `.deps.json`, `.runtimeconfig.json`, `.xml`, and `.dll.config`), then approve the Windows administrator prompt to remove them. Shared and nested DLLs are not selected or removed.
 
-Click **Create...** beside the icon field to open the built-in icon maker. Choose a telemetry or racing symbol—including graph, pulse, gauge, grid, checkered flag, steering wheel, tyre, stopwatch, and race car—then select background and accent colors and click **Save and Use**. The default output is the 16×16 PNG size used by most ATLAS example plugins; 24, 32, and 64 pixel options are also available. The saved PNG is selected for the plugin automatically. Icon creation uses only Python's standard library.
+Click **Create...** beside the icon field to open the built-in icon maker. Choose a telemetry or racing symbol—including graph, pulse, gauge, checkered flag, steering wheel, tyre, battery, telemetry, and damper—then select background and accent colors and click **Save and Use**. Icons are always generated as detailed 64×64 PNGs with a shaded background. The saved PNG is selected for the plugin automatically. Icon creation uses only Python's standard library.
 
 To run the icon maker by itself:
 
