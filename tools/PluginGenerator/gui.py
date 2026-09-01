@@ -780,8 +780,8 @@ GRAPH_CURSOR_METHOD = '''        public void MoveCursor(long timestamp)
             }
         }'''
 
-CURRENT_VALUE_TEXT = '''                            <TextBlock Text="{Binding CurrentValue, StringFormat='Current: {0:F3}'}"
-                                       FontSize="20" Foreground="White" />'''
+CURRENT_VALUE_TEXT = '''                            <TextBlock Text="{Binding CurrentValue, StringFormat='Current  {0:F3}'}"
+                                       Style="{StaticResource MetricStyle}" />'''
 
 COMPARE_VIEWMODEL_TEMPLATE = '''using System;
 using System.Collections.Generic;
@@ -1597,13 +1597,66 @@ VIEW_XAML_HEADER = '''<UserControl xmlns="http://schemas.microsoft.com/winfx/200
              mc:Ignorable="d"
              d:DesignHeight="450" d:DesignWidth="800"'''
 
+ATLAS_THEME_RESOURCES = '''
+    <UserControl.Resources>
+        <SolidColorBrush x:Key="PageBrush" Color="#10151C" />
+        <SolidColorBrush x:Key="SurfaceBrush" Color="#18212B" />
+        <SolidColorBrush x:Key="RaisedSurfaceBrush" Color="#202C38" />
+        <SolidColorBrush x:Key="BorderBrush" Color="#344454" />
+        <SolidColorBrush x:Key="AccentBrush" Color="#39C5F3" />
+        <SolidColorBrush x:Key="PrimaryTextBrush" Color="#F2F7FA" />
+        <SolidColorBrush x:Key="SecondaryTextBrush" Color="#9FB0BD" />
+        <Style TargetType="Button">
+            <Setter Property="Background" Value="{{StaticResource AccentBrush}}" />
+            <Setter Property="Foreground" Value="#081116" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Padding" Value="14,7" />
+            <Setter Property="Margin" Value="0,0,8,0" />
+            <Setter Property="Cursor" Value="Hand" />
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Background" Value="{{StaticResource RaisedSurfaceBrush}}" />
+            <Setter Property="Foreground" Value="{{StaticResource PrimaryTextBrush}}" />
+            <Setter Property="BorderBrush" Value="{{StaticResource BorderBrush}}" />
+            <Setter Property="CaretBrush" Value="{{StaticResource AccentBrush}}" />
+            <Setter Property="Padding" Value="8,5" />
+        </Style>
+        <Style TargetType="CheckBox">
+            <Setter Property="Foreground" Value="{{StaticResource PrimaryTextBrush}}" />
+        </Style>
+        <Style x:Key="CardStyle" TargetType="Border">
+            <Setter Property="Background" Value="{{StaticResource SurfaceBrush}}" />
+            <Setter Property="BorderBrush" Value="{{StaticResource BorderBrush}}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="8" />
+            <Setter Property="Padding" Value="14" />
+            <Setter Property="Margin" Value="6" />
+        </Style>
+        <Style x:Key="TitleStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{{StaticResource PrimaryTextBrush}}" />
+            <Setter Property="FontSize" Value="14" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style x:Key="MetricStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{{StaticResource AccentBrush}}" />
+            <Setter Property="FontSize" Value="26" />
+            <Setter Property="FontWeight" Value="Light" />
+        </Style>
+        <Style x:Key="CaptionStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{{StaticResource SecondaryTextBrush}}" />
+            <Setter Property="FontSize" Value="11" />
+        </Style>
+    </UserControl.Resources>
+'''
+
 VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">
-    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{StaticResource PageBrush}}">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
         <DockPanel>
-            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
 {command_buttons}            </StackPanel>
-            <ItemsControl ItemsSource="{{Binding Parameters}}">
+            <ItemsControl ItemsSource="{{Binding Parameters}}" Margin="6">
             <ItemsControl.ItemsPanel>
                 <ItemsPanelTemplate>
                     <UniformGrid Columns="2" />
@@ -1611,11 +1664,11 @@ VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
             </ItemsControl.ItemsPanel>
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                    <Border BorderBrush="DarkGray" BorderThickness="1" Padding="12" Margin="4">
+                    <Border Style="{{StaticResource CardStyle}}">
                         <StackPanel>
-                            <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
-                            <TextBlock Text="{{Binding Value, StringFormat=F3}}" FontSize="24" Foreground="White" />
-                            <TextBlock Text="{{Binding Description}}" Foreground="White" />
+                            <TextBlock Text="{{Binding Name}}" Style="{{StaticResource TitleStyle}}" />
+                            <TextBlock Text="{{Binding Value, StringFormat=F3}}" Style="{{StaticResource MetricStyle}}" Margin="0,8,0,4" />
+                            <TextBlock Text="{{Binding Description}}" Style="{{StaticResource CaptionStyle}}" TextWrapping="Wrap" />
                         </StackPanel>
                     </Border>
                 </DataTemplate>
@@ -1623,6 +1676,7 @@ VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
         </ItemsControl>
         </DockPanel>
     </ScrollViewer>
+    </Grid>
 </UserControl>
 '''
 
@@ -1645,29 +1699,28 @@ DEBUG_USER_SETTINGS_TEMPLATE = r'''<Project ToolsVersion="Current" xmlns="http:/
 '''
 
 BASIC_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">
-    <Grid>
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{StaticResource PageBrush}}" Margin="0">
 {basic_content}
     </Grid>
 </UserControl>
 '''
 
 TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">
-    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{StaticResource PageBrush}}">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
         <DockPanel>
-            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
 {command_buttons}            </StackPanel>
             <ItemsControl ItemsSource="{{Binding Series}}">
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                    <Border BorderBrush="DarkGray" BorderThickness="1" Padding="12" Margin="4">
+                    <Border Style="{{StaticResource CardStyle}}">
                         <StackPanel>
-                            <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
+                            <TextBlock Text="{{Binding Name}}" Style="{{StaticResource TitleStyle}}" />
 {current_value_text}
-                            <TextBlock Text="{{Binding SampleCount, StringFormat='Samples: {{0}}'}}" Foreground="White" />
-                            <TextBlock Text="{{Binding Minimum, StringFormat='Minimum: {{0:F3}}'}}" Foreground="White" />
-                            <TextBlock Text="{{Binding Maximum, StringFormat='Maximum: {{0:F3}}'}}" Foreground="White" />
+                            <TextBlock Text="{{Binding SampleCount, StringFormat='{{0}} samples'}}" Style="{{StaticResource CaptionStyle}}" Margin="0,6,0,0" />
+                            <TextBlock Text="{{Binding Minimum, StringFormat='Minimum  {{0:F3}}'}}" Style="{{StaticResource CaptionStyle}}" />
+                            <TextBlock Text="{{Binding Maximum, StringFormat='Maximum  {{0:F3}}'}}" Style="{{StaticResource CaptionStyle}}" />
                         </StackPanel>
                     </Border>
                 </DataTemplate>
@@ -1675,14 +1728,14 @@ TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
             </ItemsControl>
         </DockPanel>
     </ScrollViewer>
+    </Grid>
 </UserControl>
 '''
 
 TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
              xmlns:displayPluginLibrary="clr-namespace:DisplayPluginLibrary;assembly=DisplayPluginLibrary"
-             x:Class="{namespace}.{view_class}">
-    <DockPanel>
-        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <DockPanel Background="{{StaticResource PageBrush}}">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
 {command_buttons}        </StackPanel>
 {graph_title_block}
         <Grid>
@@ -1690,21 +1743,21 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                 <ColumnDefinition Width="3*" />
                 <ColumnDefinition Width="{graph_legend_width}" />
             </Grid.ColumnDefinitions>
-            <Border Margin="6" BorderBrush="DimGray" BorderThickness="1">
+            <Border Style="{{StaticResource CardStyle}}" Padding="4">
                 <Grid>
                     <displayPluginLibrary:VisualLayer x:Name="GraphVisualLayer" />
                     <displayPluginLibrary:VisualLayer x:Name="CursorVisualLayer" />
                 </Grid>
             </Border>
-            <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto"
+            <ScrollViewer Grid.Column="1" Margin="0,6,6,6" VerticalScrollBarVisibility="Auto"
                           Visibility="{graph_legend_visibility}">
                 <ItemsControl ItemsSource="{{Binding Series}}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Border BorderBrush="DimGray" BorderThickness="0,0,0,1" Padding="8">
+                            <Border Background="{{StaticResource SurfaceBrush}}" BorderBrush="{{StaticResource BorderBrush}}" BorderThickness="0,0,0,1" Padding="12">
                                 <StackPanel>
-                                    <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
-                                    <TextBlock Text="{{Binding Unit, StringFormat='Units: {{0}}'}}" Foreground="LightGray" />
+                                    <TextBlock Text="{{Binding Name}}" Style="{{StaticResource TitleStyle}}" />
+                                    <TextBlock Text="{{Binding Unit, StringFormat='Units: {{0}}'}}" Style="{{StaticResource CaptionStyle}}" Margin="0,2,0,6" />
 {current_value_text}
 {graph_statistics}
                                 </StackPanel>
@@ -1718,16 +1771,22 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
 </UserControl>
 '''
 
-BASIC_PLACEHOLDER_CONTENT = '''            <TextBlock Text="{view_class}"
-                   VerticalAlignment="Center"
-                   HorizontalAlignment="Center"
-                   Foreground="White"
-                   FontSize="20" />'''
+BASIC_PLACEHOLDER_CONTENT = '''            <Border Style="{{StaticResource CardStyle}}"
+                    VerticalAlignment="Center" HorizontalAlignment="Center" Padding="32,24">
+                <StackPanel>
+                    <TextBlock Text="{view_class}" Style="{{StaticResource TitleStyle}}"
+                               FontSize="22" HorizontalAlignment="Center" />
+                    <Border Height="3" Width="48" Background="{{StaticResource AccentBrush}}"
+                            CornerRadius="2" Margin="0,12,0,0" />
+                </StackPanel>
+            </Border>'''
 
-BASIC_ITEM_COLLECTION_CONTENT = '''            <ItemsControl ItemsSource="{Binding Items}">
+BASIC_ITEM_COLLECTION_CONTENT = '''            <ItemsControl ItemsSource="{Binding Items}" Margin="6">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate>
-                        <TextBlock Text="{Binding Name}" Foreground="White" Margin="4" />
+                        <Border Style="{StaticResource CardStyle}">
+                            <TextBlock Text="{Binding Name}" Style="{StaticResource TitleStyle}" />
+                        </Border>
                     </DataTemplate>
                 </ItemsControl.ItemTemplate>
             </ItemsControl>'''
@@ -1739,7 +1798,7 @@ def build_property_control(spec):
     label = html.escape(spec.get('display_name') or command_display_label(spec['name']), quote=True)
     name = spec['name']
     if spec.get('read_only', False):
-        editor = f'<TextBlock Text="{{Binding {name}}}" Foreground="White" />'
+        editor = f'<TextBlock Text="{{Binding {name}}}" Foreground="{{StaticResource PrimaryTextBrush}}" />'
     elif spec['type'] == 'bool':
         editor = f'<CheckBox IsChecked="{{Binding {name}}}" VerticalAlignment="Center" />'
     else:
@@ -1748,12 +1807,12 @@ def build_property_control(spec):
             'MinWidth="180" />'
         )
     return (
-        '            <Grid Margin="0,4">\n'
+        '            <Grid Margin="0,6">\n'
         '                <Grid.ColumnDefinitions>\n'
         '                    <ColumnDefinition Width="Auto" />\n'
         '                    <ColumnDefinition Width="*" />\n'
         '                </Grid.ColumnDefinitions>\n'
-        f'                <TextBlock Text="{label}" Foreground="White" Margin="0,0,12,0" />\n'
+        f'                <TextBlock Text="{label}" Style="{{StaticResource CaptionStyle}}" Margin="0,0,16,0" VerticalAlignment="Center" />\n'
         f'                <ContentControl Grid.Column="1">{editor}</ContentControl>\n'
         '            </Grid>\n'
     )
@@ -1764,7 +1823,7 @@ def build_basic_layout_content(layout, view_class, command_buttons, display_prop
     if layout not in BASIC_LAYOUTS:
         raise ValueError(f'Unknown basic view layout: {layout}')
     commands = (
-        '        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">\n'
+        '        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">\n'
         f'{command_buttons}'
         '        </StackPanel>\n'
     ) if command_buttons else ''
@@ -1775,28 +1834,28 @@ def build_basic_layout_content(layout, view_class, command_buttons, display_prop
             '{Binding Items}', f'{{Binding {collection_name}}}'
         ).replace('{Binding Name}', f'{{Binding {item_display_field}}}')
     elif layout == 'table':
-        body = f'        <DataGrid ItemsSource="{{Binding {collection_name}}}" AutoGenerateColumns="True" Margin="4" />'
+        body = f'        <DataGrid ItemsSource="{{Binding {collection_name}}}" AutoGenerateColumns="True" Margin="12" Background="{{StaticResource SurfaceBrush}}" Foreground="{{StaticResource PrimaryTextBrush}}" BorderBrush="{{StaticResource BorderBrush}}" />'
     elif layout == 'form':
         controls = ''.join(build_property_control(spec) for spec in (display_property_specs or []))
         if not controls:
             controls = '            <!-- Add display properties to generate controls. -->\n'
-        body = f'        <StackPanel Margin="12">\n{controls}        </StackPanel>'
+        body = f'        <Border Style="{{StaticResource CardStyle}}" Margin="12">\n            <StackPanel>\n{controls}            </StackPanel>\n        </Border>'
     else:
         body = BASIC_PLACEHOLDER_CONTENT.format(view_class=view_class)
     return f'        <DockPanel>\n{commands}{body}\n        </DockPanel>'
 
 COMPARE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">
-    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{StaticResource PageBrush}}">
+    <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
         <DockPanel>
-            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="4">
+            <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
 {command_buttons}            </StackPanel>
             <ItemsControl ItemsSource="{{Binding Rows}}">
             <ItemsControl.ItemTemplate>
                 <DataTemplate>
-                    <Border BorderBrush="DarkGray" BorderThickness="1" Padding="12" Margin="4">
+                    <Border Style="{{StaticResource CardStyle}}">
                         <StackPanel>
-                            <TextBlock Text="{{Binding Name}}" FontWeight="Bold" Foreground="White" />
+                            <TextBlock Text="{{Binding Name}}" Style="{{StaticResource TitleStyle}}" />
                             <ItemsControl ItemsSource="{{Binding SessionValues}}">
                                 <ItemsControl.ItemsPanel>
                                     <ItemsPanelTemplate>
@@ -1805,11 +1864,13 @@ COMPARE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <StackPanel Margin="0,4,20,0">
-                                            <TextBlock Text="{{Binding SessionName}}" Foreground="LightGray" />
+                                        <Border Background="{{StaticResource RaisedSurfaceBrush}}" CornerRadius="6" Padding="10,7" Margin="0,8,8,0">
+                                        <StackPanel>
+                                            <TextBlock Text="{{Binding SessionName}}" Style="{{StaticResource CaptionStyle}}" />
                                             <TextBlock Text="{{Binding Value, StringFormat=F3}}"
-                                                       FontSize="20" Foreground="White" />
+                                                       Style="{{StaticResource MetricStyle}}" FontSize="20" />
                                         </StackPanel>
+                                        </Border>
                                     </DataTemplate>
                                 </ItemsControl.ItemTemplate>
                             </ItemsControl>
@@ -1820,6 +1881,7 @@ COMPARE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
             </ItemsControl>
         </DockPanel>
     </ScrollViewer>
+    </Grid>
 </UserControl>
 '''
 
@@ -2447,7 +2509,7 @@ def build_command_button(spec):
     label = html.escape(spec['button_label'], quote=True)
     return (
         f'            <Button Content="{label}" Command="{{Binding {spec["name"]}Command}}" '
-        'Margin="0,0,8,0" Padding="10,4" />\n'
+        '/>\n'
     )
 
 
@@ -3258,7 +3320,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             command_buttons=command_buttons,
             graph_title_block=(
                 f'        <TextBlock DockPanel.Dock="Top" Text="{html.escape(graph_title, quote=True)}" '
-                'FontSize="20" FontWeight="Bold" Foreground="White" Margin="10,6" />'
+                'FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="14,6,14,8" />'
                 if graph_title and graph_type != 'none' else ''
             ),
                 graph_legend_width='240' if show_graph_legend else '0',
@@ -3267,10 +3329,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     CURRENT_VALUE_TEXT if behavior == BEHAVIOR_CURRENT_AND_RANGE or cursor_graph else ''
                 ),
                 graph_statistics=(
-                    '''                                    <TextBlock Text="{Binding Minimum, StringFormat='Minimum: {0:F3}'}" Foreground="White" />
-                                    <TextBlock Text="{Binding Maximum, StringFormat='Maximum: {0:F3}'}" Foreground="White" />
-                                    <TextBlock Text="{Binding Average, StringFormat='Average: {0:F3}'}" Foreground="White" />
-                                    <TextBlock Text="{Binding SampleCount, StringFormat='Samples: {0}'}" Foreground="White" />'''
+                    '''                                    <TextBlock Text="{Binding Minimum, StringFormat='Minimum: {0:F3}'}" Style="{StaticResource CaptionStyle}" />
+                                    <TextBlock Text="{Binding Maximum, StringFormat='Maximum: {0:F3}'}" Style="{StaticResource CaptionStyle}" />
+                                    <TextBlock Text="{Binding Average, StringFormat='Average: {0:F3}'}" Style="{StaticResource CaptionStyle}" />
+                                    <TextBlock Text="{Binding SampleCount, StringFormat='Samples: {0}'}" Style="{StaticResource CaptionStyle}" />'''
                     if range_behavior else ''
                 ),
             basic_content=build_basic_layout_content(
