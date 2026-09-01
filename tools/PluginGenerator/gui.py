@@ -460,6 +460,7 @@ namespace {namespace}
         public ObservableCollection<TimebaseSeriesViewModel> Series {{ get; }} =
             new ObservableCollection<TimebaseSeriesViewModel>();
 
+{show_legend_members}
 {status_state_properties}{display_properties}
 {command_properties}
     {atlas_parameter_setup}
@@ -783,6 +784,16 @@ GRAPH_CURSOR_METHOD = '''        public void MoveCursor(long timestamp)
 CURRENT_VALUE_TEXT = '''                            <TextBlock Text="{Binding CurrentValue, StringFormat='Current  {0:F3}'}"
                                        Style="{StaticResource MetricStyle}" />'''
 
+SHOW_LEGEND_MEMBERS = '''        private bool showLegend = __SHOW_LEGEND_DEFAULT__;
+
+        [Browsable(false)]
+        public bool ShowLegend
+        {
+            get => this.showLegend;
+            set => this.SetProperty(ref this.showLegend, value);
+        }
+'''
+
 COMPARE_VIEWMODEL_TEMPLATE = '''using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -927,6 +938,15 @@ COMPARE_GRAPH_MEMBERS = '''
         [Browsable(false)]
         public ObservableCollection<TimebaseSeriesViewModel> Series { get; } =
             new ObservableCollection<TimebaseSeriesViewModel>();
+
+        private bool showLegend = __SHOW_LEGEND_DEFAULT__;
+
+        [Browsable(false)]
+        public bool ShowLegend
+        {
+            get => this.showLegend;
+            set => this.SetProperty(ref this.showLegend, value);
+        }
 '''
 
 COMPARE_GRAPH_SYNC_METHOD = '''        private void SyncGraphSeries()
@@ -1736,12 +1756,13 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
              xmlns:displayPluginLibrary="clr-namespace:DisplayPluginLibrary;assembly=DisplayPluginLibrary"
              x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <DockPanel Background="{{StaticResource PageBrush}}">
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
-{command_buttons}        </StackPanel>
+{command_buttons}            <CheckBox Content="Show Legend" IsChecked="{{Binding ShowLegend}}" VerticalAlignment="Center" Margin="8,0,0,0" />
+        </StackPanel>
 {graph_title_block}
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="3*" />
-                <ColumnDefinition Width="{graph_legend_width}" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <Border Style="{{StaticResource CardStyle}}" Padding="4">
                 <Grid>
@@ -1749,8 +1770,8 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                     <displayPluginLibrary:VisualLayer x:Name="CursorVisualLayer" />
                 </Grid>
             </Border>
-            <ScrollViewer Grid.Column="1" Margin="0,6,6,6" VerticalScrollBarVisibility="Auto"
-                          Visibility="{graph_legend_visibility}">
+            <ScrollViewer Grid.Column="1" Margin="0,6,6,6" VerticalScrollBarVisibility="Auto" Width="240"
+                          Visibility="{{Binding ShowLegend, Converter={{StaticResource BoolToVisibilityConverter}}}}">
                 <ItemsControl ItemsSource="{{Binding Series}}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
@@ -3193,6 +3214,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
     command_buttons = ''.join(build_command_button(spec) for spec in command_specs)
     status_state_fields, status_state_properties = build_status_state() if include_status_state else ('', '')
     session_notification_hooks = build_session_notification_hooks() if include_session_notifications else ''
+    show_legend_members = (
+        SHOW_LEGEND_MEMBERS.replace('__SHOW_LEGEND_DEFAULT__', 'true' if show_graph_legend else 'false')
+        if graph_type != 'none' else ''
+    )
     item_collection_property = (
         '        [Browsable(false)]\n'
         f'        public ObservableCollection<{item_class_name}> {collection_name} {{ get; }} =\n'
@@ -3266,7 +3291,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 COMPARE_GRAPH_MEMBERS.replace(
                     '__GRAPH_UNITS__',
                     ', '.join(f'"{escape_csharp_string(unit)}"' for unit in graph_units),
-                ) if behavior == BEHAVIOR_COMPARE_SESSIONS and cursor_graph else ''
+                ).replace('__SHOW_LEGEND_DEFAULT__', 'true' if show_graph_legend else 'false')
+                if behavior == BEHAVIOR_COMPARE_SESSIONS and cursor_graph else ''
             ),
             compare_graph_sync_call=(
                 '                    this.SyncGraphSeries();'
@@ -3276,6 +3302,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 COMPARE_GRAPH_SYNC_METHOD if behavior == BEHAVIOR_COMPARE_SESSIONS and cursor_graph else ''
             ),
             default_sample_count=sample_count,
+            show_legend_members=show_legend_members,
         ),
     }
     if behavior == BEHAVIOR_CURRENT_VALUE and not cursor_graph:
@@ -3323,8 +3350,6 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 'FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="14,6,14,8" />'
                 if graph_title and graph_type != 'none' else ''
             ),
-                graph_legend_width='240' if show_graph_legend else '0',
-                graph_legend_visibility='Visible' if show_graph_legend else 'Collapsed',
                 current_value_text=(
                     CURRENT_VALUE_TEXT if behavior == BEHAVIOR_CURRENT_AND_RANGE or cursor_graph else ''
                 ),
