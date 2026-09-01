@@ -1405,19 +1405,23 @@ namespace {namespace}
                 return;
             }}
 
-            GetCenteredNiceBounds(current.Select(item => item.CurrentValue).ToList(), true,
+            GetCenteredNiceBounds(current.Select(item => item.CurrentValue).ToList(), !drawPoints,
                 out var minimum, out var maximum);
             var range = maximum - minimum;
             var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
-            var slotWidth = OverlayCursorBars ? extents.Width : extents.Width / current.Count;
+            // Cursor points overlay pairs of signals (1-2, 3-4, ...) into shared slots instead of one shared slot.
+            var pairOverlay = drawPoints && OverlayCursorBars;
+            var slotCount = pairOverlay
+                ? Math.Max(1, (int)Math.Ceiling(current.Count / 2d))
+                : (OverlayCursorBars ? 1 : current.Count);
+            var slotWidth = extents.Width / slotCount;
             for (var index = 0; index < current.Count; index++)
             {{
                 var item = current[index];
                 var valueY = extents.Height - (((item.CurrentValue - minimum) / range) * extents.Height);
                 var barWidth = Math.Max(2d, slotWidth * (OverlayCursorBars ? 0.6d : 0.75d));
-                var x = OverlayCursorBars
-                    ? (extents.Width - barWidth) / 2d
-                    : (index * slotWidth) + ((slotWidth - barWidth) / 2d);
+                var slotIndex = pairOverlay ? index / 2 : (OverlayCursorBars ? 0 : index);
+                var x = (slotIndex * slotWidth) + ((slotWidth - barWidth) / 2d);
                 var color = Color.FromArgb(OverlayCursorBars ? (byte)150 : (byte)230,
                     item.Color.R, item.Color.G, item.Color.B);
                 if (drawPoints)
@@ -1432,8 +1436,22 @@ namespace {namespace}
                 }}
             }}
 
+            var categoryLabels = current.Select(item => item.Name).ToList();
+            if (pairOverlay)
+            {{
+                var pairedLabels = new List<string>();
+                for (var index = 0; index < current.Count; index += 2)
+                {{
+                    pairedLabels.Add(index + 1 < current.Count
+                        ? $"{{current[index].Name}} / {{current[index + 1].Name}}"
+                        : current[index].Name);
+                }}
+
+                categoryLabels = pairedLabels;
+            }}
+
             this.DrawValueAndCategoryAxes(drawingContext, extents, minimum, maximum,
-                current.Select(item => item.Name).ToList(), OverlayCursorBars);
+                categoryLabels, OverlayCursorBars && !pairOverlay);
         }}
 
         private void DrawTimeAxes(DrawingContext drawingContext, Size extents,
@@ -1619,6 +1637,7 @@ VIEW_XAML_HEADER = '''<UserControl xmlns="http://schemas.microsoft.com/winfx/200
 
 ATLAS_THEME_RESOURCES = '''
     <UserControl.Resources>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibilityConverter" />
         <SolidColorBrush x:Key="PageBrush" Color="#10151C" />
         <SolidColorBrush x:Key="SurfaceBrush" Color="#18212B" />
         <SolidColorBrush x:Key="RaisedSurfaceBrush" Color="#202C38" />
@@ -3057,8 +3076,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError('Time-series graphs require a visible-range behavior.')
     if cursor_graph and behavior not in (BEHAVIOR_CURRENT_VALUE, BEHAVIOR_COMPARE_SESSIONS):
         raise ValueError('Cursor graphs require Current value at cursor or Compare sessions behavior.')
-    if overlay_cursor_bars and graph_type != 'cursor-histogram':
-        raise ValueError('Cursor bar overlay requires a cursor histogram.')
+    if overlay_cursor_bars and graph_type not in ('cursor-histogram', 'cursor-points'):
+        raise ValueError('Cursor bar overlay requires a cursor histogram or cursor points graph.')
     if computed_series_specs and graph_type == 'none':
         raise ValueError('Computed series require a graph.')
     if include_item_collection and basic_layout == 'text':
@@ -3783,7 +3802,7 @@ class PluginGeneratorApp(tk.Tk):
         self.overlay_cursor_bars_var = tk.BooleanVar(value=False)
         self.overlay_cursor_bars_checkbutton = tk.Checkbutton(
             advanced_frame,
-            text='Overlay parameter bars (cursor histogram)',
+            text='Overlay parameter bars/points (cursor histogram or points)',
             variable=self.overlay_cursor_bars_var,
         )
         self.overlay_cursor_bars_checkbutton.grid(row=15, column=0, columnspan=2, sticky='w', pady=4)
@@ -4443,7 +4462,7 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_units_entry.config(state=state)
         self.computed_series_entry.config(state=state)
         self.graph_legend_checkbutton.config(state=state)
-        overlay_state = tk.NORMAL if self.graph_type_var.get() == 'cursor-histogram' else tk.DISABLED
+        overlay_state = tk.NORMAL if self.graph_type_var.get() in ('cursor-histogram', 'cursor-points') else tk.DISABLED
         self.overlay_cursor_bars_checkbutton.config(state=overlay_state)
         if overlay_state == tk.DISABLED:
             self.overlay_cursor_bars_var.set(False)
