@@ -524,6 +524,9 @@ namespace {namespace}
         private IReadOnlyList<long> timestamps = Array.Empty<long>();
         private IReadOnlyList<double> values = Array.Empty<double>();
 
+        [Browsable(false)]
+        public string GraphGroup {{ get; set; }} = string.Empty;
+
         public TimebaseSeriesViewModel(Guid parameterIdentifier, string name, string unit)
         {{
             this.ParameterIdentifier = parameterIdentifier;
@@ -962,6 +965,7 @@ COMPARE_GRAPH_SYNC_METHOD = '''        private void SyncGraphSeries()
                         row.ParameterIdentifier,
                         $"{row.Name} — {sessionValue.SessionName}",
                         unit);
+                    series.GraphGroup = sessionValue.SessionName;
                     series.UpdateCurrentValue(sessionValue.Value, 0L);
                     this.Series.Add(series);
                 }
@@ -1141,13 +1145,14 @@ namespace {namespace}
     public sealed class GraphSeries
     {{
         public GraphSeries(string name, IReadOnlyList<long> timestamps, IReadOnlyList<double> values, Color color,
-            double currentValue = double.NaN)
+            double currentValue = double.NaN, string groupName = "")
         {{
             this.Name = name;
             this.Timestamps = timestamps;
             this.Values = values;
             this.Color = color;
             this.CurrentValue = currentValue;
+            this.GroupName = groupName;
         }}
 
         public string Name {{ get; }}
@@ -1159,6 +1164,8 @@ namespace {namespace}
         public Color Color {{ get; }}
 
         public double CurrentValue {{ get; }}
+
+        public string GroupName {{ get; }}
     }}
 }}
 '''
@@ -1413,6 +1420,11 @@ namespace {namespace}
             // Cursor points overlay pairs of signals into shared slots instead of one shared slot.
             // Sequential pairing groups (1-2, 3-4, ...); split-half pairing groups (k, k + n/2) e.g. (1,3), (2,4).
             var pairOverlay = drawPoints && OverlayCursorBars;
+            if (pairOverlay)
+            {{
+                this.DrawPairedCursorPoints(drawingContext, extents, current, minimum, maximum);
+                return;
+            }}
             var halfCount = pairOverlay ? Math.Max(1, (int)Math.Ceiling(current.Count / 2d)) : 0;
             var slotCount = pairOverlay ? halfCount : (OverlayCursorBars ? 1 : current.Count);
             var slotWidth = extents.Width / slotCount;
@@ -1462,6 +1474,69 @@ namespace {namespace}
 
             this.DrawValueAndCategoryAxes(drawingContext, extents, minimum, maximum,
                 categoryLabels, OverlayCursorBars && !pairOverlay);
+        }}
+
+        private void DrawPairedCursorPoints(DrawingContext drawingContext, Size extents,
+            IReadOnlyList<GraphSeries> current, double minimum, double maximum)
+        {{
+            var groups = current.GroupBy(item => item.GroupName ?? string.Empty).ToList();
+            var largestGroup = groups.Max(group => group.Count());
+            var slotCount = Math.Max(1, (int)Math.Ceiling(largestGroup / 2d));
+            var slotWidth = extents.Width / slotCount;
+            var range = maximum - minimum;
+            var traceColors = new[]
+            {{
+                Colors.Red, Colors.DeepSkyBlue, Colors.Orange, Colors.LimeGreen,
+                Colors.Magenta, Colors.Gold, Colors.Cyan, Colors.MediumPurple,
+            }};
+
+            for (var groupIndex = 0; groupIndex < groups.Count; groupIndex++)
+            {{
+                var items = groups[groupIndex].ToList();
+                var halfCount = Math.Max(1, (int)Math.Ceiling(items.Count / 2d));
+                for (var family = 0; family < 2; family++)
+                {{
+                    var points = new List<Point>();
+                    for (var localIndex = 0; localIndex < items.Count; localIndex++)
+                    {{
+                        var itemFamily = PairCursorPointsByHalf ? localIndex / halfCount : localIndex % 2;
+                        if (itemFamily != family) continue;
+                        var slot = PairCursorPointsByHalf ? localIndex % halfCount : localIndex / 2;
+                        var x = (slot + 0.5d) * slotWidth;
+                        var y = extents.Height - (((items[localIndex].CurrentValue - minimum) / range) * extents.Height);
+                        points.Add(new Point(x, y));
+                    }}
+
+                    var color = traceColors[((groupIndex * 2) + family) % traceColors.Length];
+                    var brush = new SolidColorBrush(color);
+                    var pen = new Pen(brush, 1.5d);
+                    for (var pointIndex = 1; pointIndex < points.Count; pointIndex++)
+                    {{
+                        drawingContext.DrawLine(pen, points[pointIndex - 1], points[pointIndex]);
+                    }}
+                    foreach (var point in points)
+                    {{
+                        drawingContext.DrawEllipse(brush, new Pen(Brushes.White, 1d), point, 4d, 4d);
+                    }}
+                }}
+            }}
+
+            var labels = groups[0].ToList();
+            var categories = new List<string>();
+            for (var slot = 0; slot < slotCount; slot++)
+            {{
+                var firstIndex = PairCursorPointsByHalf ? slot : slot * 2;
+                categories.Add(firstIndex < labels.Count ? ExtractSignalIndex(labels[firstIndex].Name) : string.Empty);
+            }}
+            this.DrawValueAndCategoryAxes(drawingContext, extents, minimum, maximum, categories, false);
+        }}
+
+        private static string ExtractSignalIndex(string label)
+        {{
+            var match = Regex.Match(label ?? string.Empty, @"\\(?(\\d+)\\)?(?:[^0-9]*)$");
+            return match.Success && int.TryParse(match.Groups[1].Value, out var index)
+                ? index.ToString(CultureInfo.InvariantCulture)
+                : label;
         }}
 
         private void DrawTimeAxes(DrawingContext drawingContext, Size extents,
@@ -1520,13 +1595,7 @@ namespace {namespace}
             {{
                 var label = categories[index];
 
-                string pattern =  "__REGEX_VALUE__";
-                bool isNumbered = Regex.IsMatch(label, pattern);
-
-                if (isNumbered)
-                {{
-                    label = label.Substring(label.Length - 3);
-                }}
+                label = ExtractSignalIndex(label);
 
                 this.DrawTickLabel(drawingContext, label,
                     new Point((index + 0.5d) * slotWidth, extents.Height), true, extents);
@@ -2701,7 +2770,7 @@ namespace {namespace}
                 item.Name,
                 item.Timestamps,
                 item.Values,
-                Palette[index % Palette.Length]{current_value_argument})).ToList() ?? new List<GraphSeries>();
+                Palette[index % Palette.Length]{current_value_argument}, item.GraphGroup)).ToList() ?? new List<GraphSeries>();
             this.UpdateLoadedRange(series);
 {computed_series_update}
             visual.Draw(context => this.graphRenderer.Draw(
@@ -3409,7 +3478,9 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             view_class=f'{name}View',
             viewmodel_class=f'{name}ViewModel',
             uses_time_axis='true' if graph_type == 'time-series' else 'false',
-            current_value_argument=', item.CurrentValue' if behavior == BEHAVIOR_CURRENT_AND_RANGE or cursor_graph else '',
+            current_value_argument=(
+                ', item.CurrentValue' if behavior == BEHAVIOR_CURRENT_AND_RANGE or cursor_graph else ', double.NaN'
+            ),
             computed_series_update=(
                 '            series.AddRange(ComputedGraphSeriesFactory.Create(series).ToList());'
                 if computed_series_specs else ''

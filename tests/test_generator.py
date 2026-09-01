@@ -850,6 +850,25 @@ class GenerationTests(unittest.TestCase):
         self.assertTrue((project / 'TimebaseSeriesViewModel.cs').exists())
         ET.parse(project / 'SeparationPluginView.xaml')
 
+    def test_compare_cursor_points_generate_session_traces_and_dense_index_labels(self):
+        target = self.generate(
+            behavior=BEHAVIOR_COMPARE_SESSIONS,
+            library_project=str(LIBRARY_PROJECT),
+            atlas_parameters=['TESCellTAB[001:230]', 'TESCellTAB[231:460]'],
+            graph_type='cursor-points',
+            overlay_cursor_bars=True,
+            pair_cursor_points_by_half=True,
+            parameter_max_count=460,
+        )
+        project = target / 'SeparationPlugin'
+        renderer = (project / 'GraphRenderer.cs').read_text(encoding='utf-8')
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+
+        self.assertIn('GroupBy(item => item.GroupName', renderer)
+        self.assertIn('drawingContext.DrawLine(pen', renderer)
+        self.assertIn('ExtractSignalIndex', renderer)
+        self.assertIn('series.GraphGroup = sessionValue.SessionName;', viewmodel)
+
     def test_cursor_bar_overlay_requires_cursor_histogram(self):
         with self.assertRaisesRegex(ValueError, 'requires a cursor histogram'):
             self.generate(
