@@ -1725,7 +1725,7 @@ ATLAS_THEME_RESOURCES = '''
         <SolidColorBrush x:Key="PrimaryTextBrush" Color="#F2F7FA" />
         <SolidColorBrush x:Key="SecondaryTextBrush" Color="#9FB0BD" />
         <Style TargetType="Button">
-            <Setter Property="Background" Value="{{StaticResource AccentBrush}}" />
+            <Setter Property="Background" Value="{{Binding DataContext.ThemeAccentColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
             <Setter Property="Foreground" Value="#081116" />
             <Setter Property="BorderThickness" Value="0" />
             <Setter Property="FontWeight" Value="SemiBold" />
@@ -1744,32 +1744,35 @@ ATLAS_THEME_RESOURCES = '''
             <Setter Property="Foreground" Value="{{StaticResource PrimaryTextBrush}}" />
         </Style>
         <Style x:Key="CardStyle" TargetType="Border">
-            <Setter Property="Background" Value="{{StaticResource SurfaceBrush}}" />
-            <Setter Property="BorderBrush" Value="{{StaticResource BorderBrush}}" />
+            <Setter Property="Background" Value="{{Binding DataContext.ThemeSurfaceColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
+            <Setter Property="BorderBrush" Value="{{Binding DataContext.ThemeBorderColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
             <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="8" />
             <Setter Property="Padding" Value="14" />
             <Setter Property="Margin" Value="6" />
         </Style>
         <Style x:Key="TitleStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{{StaticResource PrimaryTextBrush}}" />
-            <Setter Property="FontSize" Value="14" />
+            <Setter Property="Foreground" Value="{{Binding DataContext.ThemePrimaryTextColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
+            <Setter Property="FontFamily" Value="{{Binding DataContext.ThemeFontFamily, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
+            <Setter Property="FontSize" Value="{{Binding DataContext.ThemeTitleFontSize, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
             <Setter Property="FontWeight" Value="SemiBold" />
         </Style>
         <Style x:Key="MetricStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{{StaticResource AccentBrush}}" />
-            <Setter Property="FontSize" Value="26" />
+            <Setter Property="Foreground" Value="{{Binding DataContext.ThemeAccentColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
+            <Setter Property="FontFamily" Value="{{Binding DataContext.ThemeFontFamily, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
+            <Setter Property="FontSize" Value="{{Binding DataContext.ThemeMetricFontSize, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
             <Setter Property="FontWeight" Value="Light" />
         </Style>
         <Style x:Key="CaptionStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{{StaticResource SecondaryTextBrush}}" />
-            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{{Binding DataContext.ThemeSecondaryTextColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
+            <Setter Property="FontFamily" Value="{{Binding DataContext.ThemeFontFamily, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
+            <Setter Property="FontSize" Value="{{Binding DataContext.ThemeBaseFontSize, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
         </Style>
     </UserControl.Resources>
 '''
 
 VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{StaticResource PageBrush}}">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" FontFamily="{{Binding ThemeFontFamily}}" FontSize="{{Binding ThemeBaseFontSize}}">
     <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
         <DockPanel>
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
@@ -1817,14 +1820,14 @@ DEBUG_USER_SETTINGS_TEMPLATE = r'''<Project ToolsVersion="Current" xmlns="http:/
 '''
 
 BASIC_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{StaticResource PageBrush}}" Margin="0">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" FontFamily="{{Binding ThemeFontFamily}}" FontSize="{{Binding ThemeBaseFontSize}}" Margin="0">
 {basic_content}
     </Grid>
 </UserControl>
 '''
 
 TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{StaticResource PageBrush}}">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" FontFamily="{{Binding ThemeFontFamily}}" FontSize="{{Binding ThemeBaseFontSize}}">
     <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
         <DockPanel>
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
@@ -1852,7 +1855,7 @@ TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
 
 TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
              xmlns:displayPluginLibrary="clr-namespace:DisplayPluginLibrary;assembly=DisplayPluginLibrary"
-             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <DockPanel Background="{{StaticResource PageBrush}}">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <DockPanel Background="{{Binding ThemeBackgroundColor}}" FontFamily="{{Binding ThemeFontFamily}}" FontSize="{{Binding ThemeBaseFontSize}}">
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
 {command_buttons}            <CheckBox Content="Show Legend" IsChecked="{{Binding ShowLegend}}" VerticalAlignment="Center" Margin="8,0,0,0" />
         </StackPanel>
@@ -1873,7 +1876,7 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                 <ItemsControl ItemsSource="{{Binding Series}}">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate>
-                            <Border Background="{{StaticResource SurfaceBrush}}" BorderBrush="{{StaticResource BorderBrush}}" BorderThickness="0,0,0,1" Padding="12">
+                            <Border Style="{{StaticResource CardStyle}}" Margin="0" CornerRadius="0" BorderThickness="0,0,0,1">
                                 <StackPanel>
                                     <TextBlock Text="{{Binding Name}}" Style="{{StaticResource TitleStyle}}" />
                                     <TextBlock Text="{{Binding Unit, StringFormat='Units: {{0}}'}}" Style="{{StaticResource CaptionStyle}}" Margin="0,2,0,6" />
@@ -1964,7 +1967,7 @@ def build_basic_layout_content(layout, view_class, command_buttons, display_prop
     return f'        <DockPanel>\n{commands}{body}\n        </DockPanel>'
 
 COMPARE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{StaticResource PageBrush}}">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" FontFamily="{{Binding ThemeFontFamily}}" FontSize="{{Binding ThemeBaseFontSize}}">
     <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
         <DockPanel>
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
@@ -1983,11 +1986,11 @@ COMPARE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
                                 </ItemsControl.ItemsPanel>
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border Background="{{StaticResource RaisedSurfaceBrush}}" CornerRadius="6" Padding="10,7" Margin="0,8,8,0">
+                                        <Border Background="{{Binding DataContext.ThemeSurfaceColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" CornerRadius="6" Padding="10,7" Margin="0,8,8,0">
                                         <StackPanel>
                                             <TextBlock Text="{{Binding SessionName}}" Style="{{StaticResource CaptionStyle}}" />
                                             <TextBlock Text="{{Binding Value, StringFormat=F3}}"
-                                                       Style="{{StaticResource MetricStyle}}" FontSize="20" />
+                                                       Style="{{StaticResource MetricStyle}}" />
                                         </StackPanel>
                                         </Border>
                                     </DataTemplate>
@@ -2231,6 +2234,34 @@ def build_display_property_spec(name, display_name='', category='', description=
         'change_action': change_action,
         'read_only': bool(read_only),
     }
+
+
+def build_theme_property_specs():
+    definitions = (
+        ('ThemeBackgroundColor', 'Background color', 'string', '#10151C'),
+        ('ThemeSurfaceColor', 'Panel color', 'string', '#18212B'),
+        ('ThemeBorderColor', 'Border color', 'string', '#344454'),
+        ('ThemeAccentColor', 'Accent color', 'string', '#39C5F3'),
+        ('ThemePrimaryTextColor', 'Primary text color', 'string', '#F2F7FA'),
+        ('ThemeSecondaryTextColor', 'Secondary text color', 'string', '#9FB0BD'),
+        ('ThemeFontFamily', 'Font family', 'string', 'Segoe UI'),
+        ('ThemeBaseFontSize', 'Base font size', 'double', '11'),
+        ('ThemeTitleFontSize', 'Title font size', 'double', '14'),
+        ('ThemeMetricFontSize', 'Metric font size', 'double', '26'),
+    )
+    return [
+        build_display_property_spec(
+            name,
+            display_name=display_name,
+            category='Appearance',
+            description='Controls the generated display theme.',
+            order=1000 + index,
+            persisted=True,
+            property_type=property_type,
+            default_value=default_value,
+        )
+        for index, (name, display_name, property_type, default_value) in enumerate(definitions)
+    ]
 
 
 def escape_csharp_string(value):
@@ -3131,6 +3162,11 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             existing_atlas_parameters.add(validated_identifier)
     atlas_parameters = expanded_atlas_parameters
     display_property_specs = list(display_property_specs or [])
+    existing_display_property_names = {spec['name'] for spec in display_property_specs}
+    display_property_specs.extend(
+        spec for spec in build_theme_property_specs()
+        if spec['name'] not in existing_display_property_names
+    )
     command_specs = list(command_specs or [])
     computed_series_specs = list(computed_series_specs or [])
     graph_title = str(graph_title or '').strip()
@@ -3450,7 +3486,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             command_buttons=command_buttons,
             graph_title_block=(
                 f'        <TextBlock DockPanel.Dock="Top" Text="{html.escape(graph_title, quote=True)}" '
-                'FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource PrimaryTextBrush}" Margin="14,6,14,8" />'
+                'FontSize="{Binding ThemeTitleFontSize}" FontFamily="{Binding ThemeFontFamily}" FontWeight="SemiBold" Foreground="{Binding ThemePrimaryTextColor}" Margin="14,6,14,8" />'
                 if graph_title and graph_type != 'none' else ''
             ),
                 current_value_text=(

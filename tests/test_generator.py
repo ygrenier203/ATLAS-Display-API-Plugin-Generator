@@ -430,6 +430,22 @@ class ParameterAndPropertyTests(unittest.TestCase):
 
 
 class GenerationTests(unittest.TestCase):
+    def test_generated_views_expose_persisted_theme_properties(self):
+        target = self.generate(include_parameters=False)
+        project = target / 'SeparationPlugin'
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
+        view = (project / 'SeparationPluginView.xaml').read_text(encoding='utf-8')
+
+        for property_name in (
+            'ThemeBackgroundColor', 'ThemeSurfaceColor', 'ThemeBorderColor', 'ThemeAccentColor',
+            'ThemePrimaryTextColor', 'ThemeSecondaryTextColor', 'ThemeFontFamily',
+            'ThemeBaseFontSize', 'ThemeTitleFontSize', 'ThemeMetricFontSize',
+        ):
+            self.assertIn(f'public ', viewmodel)
+            self.assertIn(property_name, viewmodel)
+        self.assertIn('Background="{Binding ThemeBackgroundColor}"', view)
+        self.assertIn('ThemeMetricFontSize', view)
+
     def generate(self, **options):
         temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(temporary_directory.cleanup)
