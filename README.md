@@ -95,7 +95,9 @@ Standard graphs render numeric axis scales; time-series X axes use ATLAS timesta
 
 Computed traces can combine the first two raw graph series using `difference`, `sum`, `average`, or safe `ratio` operations. Enter comma-separated `Name:operation` values in the GUI or repeat `--computed-series`, for example `--computed-series Delta:difference`.
 
-Graph modes also include `scatter` (first parameter on X, second on Y), `histogram` (distribution buckets for the first parameter), `cursor-histogram` (one bar per parameter using its current cursor value), and `bar` (one visible-range average bar per series). Cursor histograms require **Current value + visible range** behavior. Enable **Overlay parameter bars** to draw their translucent bars on top of one another instead of side by side; the CLI equivalents are `--graph cursor-histogram` and `--overlay-cursor-bars`.
+Graph modes also include `scatter` (first parameter on X, second on Y), `histogram` (distribution buckets for the first parameter), `cursor-histogram` (one bar per parameter using its current cursor value), `cursor-points`, and `bar` (one visible-range average bar per series). Cursor graphs work with **Current value at cursor** and **Compare sessions at cursor**. Overlaid cursor points can pair sequential parameters or split the list into two signal families. The renderer extracts trailing indices from dense names such as `TESCellTAB(023)`, adapts label spacing, and connects each family/session as a separate colored trace—two lines for one session and four for a two-session comparison.
+
+Every generated display includes persisted **Appearance** properties for background, panel, border, accent and text colors plus font family and base/title/metric sizes. These are ordinary ATLAS display properties bound into the generated XAML, so workbook users can restyle a display without editing code.
 
 Select `custom` when the standard renderers do not fit. The generator creates a separate `CustomGraphRenderer.cs` with a `DrawingContext`, graph extents, and all requested series ready for arbitrary native WPF drawing.
 

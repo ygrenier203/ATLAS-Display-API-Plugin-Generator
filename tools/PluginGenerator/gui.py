@@ -3829,6 +3829,9 @@ class PluginGeneratorApp(tk.Tk):
         tk.Button(command_button_frame, text='Add...', command=self.add_command_dialog).pack(side=tk.LEFT, padx=4)
         tk.Button(command_button_frame, text='Edit...', command=self.edit_selected_command).pack(side=tk.LEFT, padx=4)
         tk.Button(command_button_frame, text='Remove', command=self.remove_selected_command).pack(side=tk.LEFT, padx=4)
+
+        graph_frame = tk.LabelFrame(scrollable_frame, text='Graph Configuration', padx=8, pady=8)
+        graph_frame.pack(fill=tk.X, pady=8)
         
         # === Advanced Settings ===
         advanced_section = tk.Frame(scrollable_frame)
@@ -3904,52 +3907,53 @@ class PluginGeneratorApp(tk.Tk):
         self.item_fields_entry = tk.Entry(advanced_frame, textvariable=self.item_fields_var, width=36)
         self.item_fields_entry.grid(row=9, column=1, sticky='ew', padx=8)
 
-        tk.Label(advanced_frame, text='Graph:').grid(row=10, column=0, sticky='w', pady=4)
+        tk.Label(graph_frame, text='Graph:').grid(row=0, column=0, sticky='w', pady=4)
         self.graph_type_var = tk.StringVar(value='none')
         self.graph_type_combo = ttk.Combobox(
-            advanced_frame,
+            graph_frame,
             textvariable=self.graph_type_var,
             values=('none', 'time-series', 'scatter', 'histogram', 'cursor-histogram', 'cursor-points', 'bar', 'custom'),
             state='disabled',
             width=22,
         )
-        self.graph_type_combo.grid(row=10, column=1, sticky='w', padx=8)
+        self.graph_type_combo.grid(row=0, column=1, sticky='w', padx=8)
         self.graph_type_combo.bind('<MouseWheel>', lambda event: "break")
         self.graph_type_combo.bind('<<ComboboxSelected>>', lambda event: self.update_graph_states())
-        tk.Label(advanced_frame, text='Computed series (Name:operation):').grid(row=11, column=0, sticky='w', pady=4)
+        tk.Label(graph_frame, text='Computed series (Name:operation):').grid(row=1, column=0, sticky='w', pady=4)
         self.computed_series_var = tk.StringVar(value='')
-        self.computed_series_entry = tk.Entry(advanced_frame, textvariable=self.computed_series_var, width=36)
-        self.computed_series_entry.grid(row=11, column=1, sticky='ew', padx=8)
-        tk.Label(advanced_frame, text='Graph title:').grid(row=12, column=0, sticky='w', pady=4)
+        self.computed_series_entry = tk.Entry(graph_frame, textvariable=self.computed_series_var, width=36)
+        self.computed_series_entry.grid(row=1, column=1, sticky='ew', padx=8)
+        tk.Label(graph_frame, text='Graph title:').grid(row=2, column=0, sticky='w', pady=4)
         self.graph_title_var = tk.StringVar(value='')
-        self.graph_title_entry = tk.Entry(advanced_frame, textvariable=self.graph_title_var, width=36)
-        self.graph_title_entry.grid(row=12, column=1, sticky='ew', padx=8)
-        tk.Label(advanced_frame, text='Series units (comma separated):').grid(row=13, column=0, sticky='w', pady=4)
+        self.graph_title_entry = tk.Entry(graph_frame, textvariable=self.graph_title_var, width=36)
+        self.graph_title_entry.grid(row=2, column=1, sticky='ew', padx=8)
+        tk.Label(graph_frame, text='Series units (comma separated):').grid(row=3, column=0, sticky='w', pady=4)
         self.graph_units_var = tk.StringVar(value='')
-        self.graph_units_entry = tk.Entry(advanced_frame, textvariable=self.graph_units_var, width=36)
-        self.graph_units_entry.grid(row=13, column=1, sticky='ew', padx=8)
+        self.graph_units_entry = tk.Entry(graph_frame, textvariable=self.graph_units_var, width=36)
+        self.graph_units_entry.grid(row=3, column=1, sticky='ew', padx=8)
         self.graph_legend_var = tk.BooleanVar(value=True)
         self.graph_legend_checkbutton = tk.Checkbutton(
-            advanced_frame,
+            graph_frame,
             text='Show graph legend and statistics',
             variable=self.graph_legend_var,
         )
-        self.graph_legend_checkbutton.grid(row=14, column=0, columnspan=2, sticky='w', pady=4)
+        self.graph_legend_checkbutton.grid(row=4, column=0, columnspan=2, sticky='w', pady=4)
         self.overlay_cursor_bars_var = tk.BooleanVar(value=False)
         self.overlay_cursor_bars_checkbutton = tk.Checkbutton(
-            advanced_frame,
+            graph_frame,
             text='Overlay parameter bars/points (cursor histogram or points)',
             variable=self.overlay_cursor_bars_var,
             command=self.update_graph_states,
         )
-        self.overlay_cursor_bars_checkbutton.grid(row=15, column=0, columnspan=2, sticky='w', pady=4)
+        self.overlay_cursor_bars_checkbutton.grid(row=5, column=0, columnspan=2, sticky='w', pady=4)
         self.pair_cursor_points_by_half_var = tk.BooleanVar(value=False)
         self.pair_cursor_points_by_half_checkbutton = tk.Checkbutton(
-            advanced_frame,
+            graph_frame,
             text='Pair overlaid points as (k, k + n/2) instead of (1-2, 3-4, ...)',
             variable=self.pair_cursor_points_by_half_var,
         )
-        self.pair_cursor_points_by_half_checkbutton.grid(row=16, column=0, columnspan=2, sticky='w', pady=4)
+        self.pair_cursor_points_by_half_checkbutton.grid(row=6, column=0, columnspan=2, sticky='w', pady=4)
+        graph_frame.columnconfigure(1, weight=1)
         self.update_graph_states()
         
         # === Action Buttons ===
