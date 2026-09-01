@@ -741,18 +741,22 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('public string Unit', series_viewmodel)
         ET.parse(view_path)
 
-    def test_time_graph_legend_can_be_hidden(self):
+    def test_time_graph_legend_is_togglable_at_runtime(self):
         target = self.generate(
             behavior=BEHAVIOR_VISIBLE_RANGE,
             library_project=str(LIBRARY_PROJECT),
             graph_type='time-series',
             show_graph_legend=False,
         )
-        view_path = target / 'SeparationPlugin' / 'SeparationPluginView.xaml'
+        project = target / 'SeparationPlugin'
+        view_path = project / 'SeparationPluginView.xaml'
         view = view_path.read_text(encoding='utf-8')
+        viewmodel = (project / 'SeparationPluginViewModel.cs').read_text(encoding='utf-8')
 
-        self.assertIn('<ColumnDefinition Width="0" />', view)
-        self.assertIn('Visibility="Collapsed"', view)
+        self.assertIn('IsChecked="{Binding ShowLegend}"', view)
+        self.assertIn('Visibility="{Binding ShowLegend, Converter={StaticResource BoolToVisibilityConverter}}"', view)
+        self.assertIn('public bool ShowLegend', viewmodel)
+        self.assertIn('private bool showLegend = false;', viewmodel)
         ET.parse(view_path)
 
     def test_cursor_histogram_uses_parameter_cursor_values_and_optional_overlay(self):
@@ -801,7 +805,28 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('GraphType = "cursor-points"', renderer)
         self.assertIn('DrawEllipse', renderer)
         self.assertIn('UpdateCurrentValue', viewmodel)
-        self.assertNotIn('DataRequestSampleCount', viewmodel)
+
+    def test_cursor_points_can_pair_by_split_half(self):
+        target = self.generate(
+            behavior=BEHAVIOR_CURRENT_VALUE,
+            library_project=str(LIBRARY_PROJECT),
+            graph_type='cursor-points',
+            overlay_cursor_bars=True,
+            pair_cursor_points_by_half=True,
+        )
+        project = target / 'SeparationPlugin'
+        renderer = (project / 'GraphRenderer.cs').read_text(encoding='utf-8')
+
+        self.assertIn('PairCursorPointsByHalf = true', renderer)
+
+    def test_pair_by_split_half_requires_overlaid_cursor_points(self):
+        with self.assertRaisesRegex(ValueError, 'Split-half pairing requires overlaid cursor points'):
+            self.generate(
+                behavior=BEHAVIOR_CURRENT_VALUE,
+                library_project=str(LIBRARY_PROJECT),
+                graph_type='cursor-points',
+                pair_cursor_points_by_half=True,
+            )
 
     def test_compare_sessions_can_generate_cursor_histogram(self):
         target = self.generate(

@@ -45,6 +45,7 @@ def run(args=None):
 	parser.add_argument('--graph-unit', action='append', default=[], help='unit for a graph series, in parameter order; repeat as needed')
 	parser.add_argument('--no-graph-legend', action='store_true', help='hide the graph legend and statistics panel')
 	parser.add_argument('--overlay-cursor-bars', action='store_true', help='overlay parameter bars in a cursor histogram')
+	parser.add_argument('--pair-cursor-points-by-half', action='store_true', help='pair overlaid cursor points as (k, k + n/2) instead of (1-2, 3-4, ...)')
 	parser.add_argument('--clear-settings', action='store_true', help='clear persisted paths used by the generator and exit')
 	options = parser.parse_args(args)
 
@@ -152,6 +153,7 @@ def run(args=None):
 		graph_units=options.graph_unit,
 		show_graph_legend=not options.no_graph_legend,
 		overlay_cursor_bars=options.overlay_cursor_bars,
+		pair_cursor_points_by_half=options.pair_cursor_points_by_half,
 		parameter_max_count=options.max_parameters,
 		workspace_root=default_workspace_root(),
 		library_project=library_project,

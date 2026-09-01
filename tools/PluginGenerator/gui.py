@@ -1177,6 +1177,7 @@ namespace {namespace}
     {{
         private static readonly string GraphType = "__GRAPH_TYPE__";
         private static readonly bool OverlayCursorBars = __CURSOR_BAR_OVERLAY__;
+        private static readonly bool PairCursorPointsByHalf = __PAIR_CURSOR_POINTS_BY_HALF__;
 
         public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series,
             long? viewportStart = null, long? viewportEnd = null)
@@ -1409,21 +1410,26 @@ namespace {namespace}
                 out var minimum, out var maximum);
             var range = maximum - minimum;
             var zeroY = extents.Height - (((0d - minimum) / range) * extents.Height);
-            // Cursor points overlay pairs of signals (1-2, 3-4, ...) into shared slots instead of one shared slot.
+            // Cursor points overlay pairs of signals into shared slots instead of one shared slot.
+            // Sequential pairing groups (1-2, 3-4, ...); split-half pairing groups (k, k + n/2) e.g. (1,3), (2,4).
             var pairOverlay = drawPoints && OverlayCursorBars;
-            var slotCount = pairOverlay
-                ? Math.Max(1, (int)Math.Ceiling(current.Count / 2d))
-                : (OverlayCursorBars ? 1 : current.Count);
+            var halfCount = pairOverlay ? Math.Max(1, (int)Math.Ceiling(current.Count / 2d)) : 0;
+            var slotCount = pairOverlay ? halfCount : (OverlayCursorBars ? 1 : current.Count);
             var slotWidth = extents.Width / slotCount;
             for (var index = 0; index < current.Count; index++)
             {{
                 var item = current[index];
                 var valueY = extents.Height - (((item.CurrentValue - minimum) / range) * extents.Height);
                 var barWidth = Math.Max(2d, slotWidth * (OverlayCursorBars ? 0.6d : 0.75d));
-                var slotIndex = pairOverlay ? index / 2 : (OverlayCursorBars ? 0 : index);
+                var slotIndex = pairOverlay
+                    ? (PairCursorPointsByHalf ? index % halfCount : index / 2)
+                    : (OverlayCursorBars ? 0 : index);
+                var pairPosition = pairOverlay
+                    ? (PairCursorPointsByHalf ? index / halfCount : index % 2)
+                    : 0;
                 var x = (slotIndex * slotWidth) + ((slotWidth - barWidth) / 2d);
                 // Paired cursor points are colored by position in the pair (first red, second blue), not by series color.
-                var baseColor = pairOverlay ? (index % 2 == 0 ? Colors.Red : Colors.Blue) : item.Color;
+                var baseColor = pairOverlay ? (pairPosition == 0 ? Colors.Red : Colors.Blue) : item.Color;
                 var color = Color.FromArgb(OverlayCursorBars ? (byte)150 : (byte)230,
                     baseColor.R, baseColor.G, baseColor.B);
                 if (drawPoints)
@@ -1442,11 +1448,13 @@ namespace {namespace}
             if (pairOverlay)
             {{
                 var pairedLabels = new List<string>();
-                for (var index = 0; index < current.Count; index += 2)
+                for (var slot = 0; slot < halfCount; slot++)
                 {{
-                    pairedLabels.Add(index + 1 < current.Count
-                        ? $"{{current[index].Name}} / {{current[index + 1].Name}}"
-                        : current[index].Name);
+                    var firstIndex = PairCursorPointsByHalf ? slot : slot * 2;
+                    var secondIndex = PairCursorPointsByHalf ? slot + halfCount : (slot * 2) + 1;
+                    pairedLabels.Add(secondIndex < current.Count
+                        ? $"{{current[firstIndex].Name}} / {{current[secondIndex].Name}}"
+                        : current[firstIndex].Name);
                 }}
 
                 categoryLabels = pairedLabels;
@@ -3035,6 +3043,7 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                     basic_layout='text', collection_name='Items', item_class_name='ItemViewModel',
                     item_field_specs=None, graph_type='none', computed_series_specs=None, graph_title='',
                     graph_units=None, show_graph_legend=True, overlay_cursor_bars=False,
+                    pair_cursor_points_by_half=False,
                     dll_specs=None, atlas_install_directory=None, sample_count = 100):
     if not include_view:
         raise ValueError('Generated display plugins require a WPF view.')
@@ -3080,6 +3089,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
         raise ValueError('Cursor graphs require Current value at cursor or Compare sessions behavior.')
     if overlay_cursor_bars and graph_type not in ('cursor-histogram', 'cursor-points'):
         raise ValueError('Cursor bar overlay requires a cursor histogram or cursor points graph.')
+    if pair_cursor_points_by_half and not (graph_type == 'cursor-points' and overlay_cursor_bars):
+        raise ValueError('Split-half pairing requires overlaid cursor points.')
     if computed_series_specs and graph_type == 'none':
         raise ValueError('Computed series require a graph.')
     if include_item_collection and basic_layout == 'text':
@@ -3343,6 +3354,8 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
                 '__REGEX_VALUE__', regex_val
             ).replace('__GRAPH_TYPE__', graph_type).replace(
                 '__CURSOR_BAR_OVERLAY__', 'true' if overlay_cursor_bars else 'false'
+            ).replace(
+                '__PAIR_CURSOR_POINTS_BY_HALF__', 'true' if pair_cursor_points_by_half else 'false'
             )
             files['CustomGraphRenderer.cs'] = CUSTOM_GRAPH_RENDERER_TEMPLATE.format(namespace=namespace)
             if computed_series_specs:
@@ -3806,8 +3819,16 @@ class PluginGeneratorApp(tk.Tk):
             advanced_frame,
             text='Overlay parameter bars/points (cursor histogram or points)',
             variable=self.overlay_cursor_bars_var,
+            command=self.update_graph_states,
         )
         self.overlay_cursor_bars_checkbutton.grid(row=15, column=0, columnspan=2, sticky='w', pady=4)
+        self.pair_cursor_points_by_half_var = tk.BooleanVar(value=False)
+        self.pair_cursor_points_by_half_checkbutton = tk.Checkbutton(
+            advanced_frame,
+            text='Pair overlaid points as (k, k + n/2) instead of (1-2, 3-4, ...)',
+            variable=self.pair_cursor_points_by_half_var,
+        )
+        self.pair_cursor_points_by_half_checkbutton.grid(row=16, column=0, columnspan=2, sticky='w', pady=4)
         self.update_graph_states()
         
         # === Action Buttons ===
@@ -4402,6 +4423,7 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_units_var.set('')
         self.graph_legend_var.set(True)
         self.overlay_cursor_bars_var.set(False)
+        self.pair_cursor_points_by_half_var.set(False)
         self.update_graph_states()
         messagebox.showinfo('Reset', 'Form has been reset to default values')
 
@@ -4468,6 +4490,14 @@ class PluginGeneratorApp(tk.Tk):
         self.overlay_cursor_bars_checkbutton.config(state=overlay_state)
         if overlay_state == tk.DISABLED:
             self.overlay_cursor_bars_var.set(False)
+        pair_state = (
+            tk.NORMAL
+            if self.graph_type_var.get() == 'cursor-points' and self.overlay_cursor_bars_var.get()
+            else tk.DISABLED
+        )
+        self.pair_cursor_points_by_half_checkbutton.config(state=pair_state)
+        if pair_state == tk.DISABLED:
+            self.pair_cursor_points_by_half_var.set(False)
 
     def clear_saved_paths(self):
         if not messagebox.askyesno('Clear Saved Paths', 'Delete the persisted output, library, icon, and ATLAS paths?'):
@@ -4503,6 +4533,7 @@ class PluginGeneratorApp(tk.Tk):
             'graph_units': self.graph_units_var.get(),
             'show_graph_legend': self.graph_legend_var.get(),
             'overlay_cursor_bars': self.overlay_cursor_bars_var.get(),
+            'pair_cursor_points_by_half': self.pair_cursor_points_by_half_var.get(),
         }
 
     def apply_preset_configuration(self, configuration):
@@ -4535,6 +4566,7 @@ class PluginGeneratorApp(tk.Tk):
         self.graph_units_var.set(configuration.get('graph_units', ''))
         self.graph_legend_var.set(configuration.get('show_graph_legend', True))
         self.overlay_cursor_bars_var.set(configuration.get('overlay_cursor_bars', False))
+        self.pair_cursor_points_by_half_var.set(configuration.get('pair_cursor_points_by_half', False))
         self.update_behavior_states()
 
     def save_preset_dialog(self):
@@ -4645,6 +4677,7 @@ class PluginGeneratorApp(tk.Tk):
                 graph_units=graph_units,
                 show_graph_legend=self.graph_legend_var.get(),
                 overlay_cursor_bars=self.overlay_cursor_bars_var.get(),
+                pair_cursor_points_by_half=self.pair_cursor_points_by_half_var.get(),
                 parameter_max_count=parameter_max_count,
                 workspace_root=default_workspace_root(),
                 description=self.description_var.get().strip() or None,
