@@ -1422,8 +1422,10 @@ namespace {namespace}
                 var barWidth = Math.Max(2d, slotWidth * (OverlayCursorBars ? 0.6d : 0.75d));
                 var slotIndex = pairOverlay ? index / 2 : (OverlayCursorBars ? 0 : index);
                 var x = (slotIndex * slotWidth) + ((slotWidth - barWidth) / 2d);
+                // Paired cursor points are colored by position in the pair (first red, second blue), not by series color.
+                var baseColor = pairOverlay ? (index % 2 == 0 ? Colors.Red : Colors.Blue) : item.Color;
                 var color = Color.FromArgb(OverlayCursorBars ? (byte)150 : (byte)230,
-                    item.Color.R, item.Color.G, item.Color.B);
+                    baseColor.R, baseColor.G, baseColor.B);
                 if (drawPoints)
                 {{
                     drawingContext.DrawEllipse(new SolidColorBrush(color), new Pen(Brushes.White, 1d),
