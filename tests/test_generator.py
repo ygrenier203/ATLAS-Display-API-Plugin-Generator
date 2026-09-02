@@ -445,6 +445,8 @@ class GenerationTests(unittest.TestCase):
             self.assertIn(property_name, viewmodel)
         self.assertIn('Background="{Binding ThemeBackgroundColor}"', view)
         self.assertIn('ThemeMetricFontSize', view)
+        self.assertIn('TextElement.FontFamily="{Binding ThemeFontFamily}"', view)
+        self.assertIn('TextElement.FontSize="{Binding ThemeBaseFontSize}"', view)
 
     def generate(self, **options):
         temporary_directory = tempfile.TemporaryDirectory()
@@ -883,7 +885,15 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('GroupBy(item => item.GroupName', renderer)
         self.assertIn('drawingContext.DrawLine(pen', renderer)
         self.assertIn('ExtractSignalIndex', renderer)
+        self.assertIn('TryGetCursorPoint', renderer)
+        self.assertIn('CursorHitTarget', renderer)
         self.assertIn('series.GraphGroup = sessionValue.SessionName;', viewmodel)
+        self.assertIn('graphSeries?.UpdateCurrentValue(update.Value, 0L);', viewmodel)
+
+        codebehind = (project / 'SeparationPluginView.xaml.cs').read_text(encoding='utf-8')
+        self.assertIn('DispatcherTimer', codebehind)
+        self.assertIn('TimeSpan.FromMilliseconds(33)', codebehind)
+        self.assertIn('this.graphRenderer.TryGetCursorPoint', codebehind)
 
     def test_cursor_bar_overlay_requires_cursor_histogram(self):
         with self.assertRaisesRegex(ValueError, 'requires a cursor histogram'):

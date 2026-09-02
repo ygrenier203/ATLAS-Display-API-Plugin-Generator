@@ -366,6 +366,7 @@ using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 {extra_usings}
 namespace {namespace}
 {{
@@ -474,6 +475,18 @@ namespace {namespace}
 
         private void SyncSeries()
         {{
+            var parameters = this.DisplayParameterService.PrimaryParameters;
+            if (this.Series.Count == parameters.Count && Enumerable.Range(0, parameters.Count).All(index =>
+                this.Series[index].ParameterIdentifier == parameters[index].InstanceIdentifier))
+            {{
+                for (var index = 0; index < parameters.Count; index++)
+                {{
+                    this.Series[index].Name = parameters[index].Name;
+                    this.Series[index].Unit = index < GraphUnits.Length ? GraphUnits[index] : string.Empty;
+                }}
+                return;
+            }}
+
             var existing = this.Series.ToDictionary(item => item.ParameterIdentifier);
             this.Series.Clear();
             for (var index = 0; index < this.DisplayParameterService.PrimaryParameters.Count; index++)
@@ -898,8 +911,8 @@ namespace {namespace}
                     foreach (var update in updates)
                     {{
                         row.Update(update.SessionKey, update.Value);
+{compare_graph_update_call}
                     }}
-{compare_graph_sync_call}
                 }});
             }}
             catch (Exception exception)
@@ -911,9 +924,25 @@ namespace {namespace}
         private void SyncRows()
         {{
             var sessions = this.ActiveCompositeSessionContainer.CompositeSessions.ToList();
+            var parameters = this.DisplayParameterService.ParameterContainers.ToList();
+            var topologyMatches = this.Rows.Count == parameters.Count &&
+                Enumerable.Range(0, parameters.Count).All(index =>
+                    this.Rows[index].ParameterIdentifier == parameters[index].InstanceIdentifier &&
+                    this.Rows[index].SessionValues.Count == sessions.Count &&
+                    Enumerable.Range(0, sessions.Count).All(sessionIndex =>
+                        this.Rows[index].SessionValues[sessionIndex].SessionKey == sessions[sessionIndex].Key));
+            if (topologyMatches)
+            {{
+                for (var index = 0; index < parameters.Count; index++)
+                {{
+                    this.Rows[index].Name = parameters[index].Name;
+                }}
+                return;
+            }}
+
             var existing = this.Rows.ToDictionary(row => row.ParameterIdentifier);
             this.Rows.Clear();
-            foreach (var parameterContainer in this.DisplayParameterService.ParameterContainers)
+            foreach (var parameterContainer in parameters)
             {{
                 if (!existing.TryGetValue(parameterContainer.InstanceIdentifier, out var row))
                 {{
@@ -974,6 +1003,13 @@ COMPARE_GRAPH_SYNC_METHOD = '''        private void SyncGraphSeries()
             }
         }
 '''
+
+COMPARE_GRAPH_UPDATE_CALL = '''                        var sessionValue = row.SessionValues.FirstOrDefault(item =>
+                            item.SessionKey == update.SessionKey);
+                        var graphSeries = sessionValue == null ? null : this.Series.FirstOrDefault(item =>
+                            item.ParameterIdentifier == parameterIdentifier &&
+                            item.GraphGroup == sessionValue.SessionName);
+                        graphSeries?.UpdateCurrentValue(update.Value, 0L);'''
 
 COMPARE_ROW_VIEWMODEL_TEMPLATE = '''using System;
 using System.Collections.Generic;
@@ -1185,10 +1221,12 @@ namespace {namespace}
         private static readonly string GraphType = "__GRAPH_TYPE__";
         private static readonly bool OverlayCursorBars = __CURSOR_BAR_OVERLAY__;
         private static readonly bool PairCursorPointsByHalf = __PAIR_CURSOR_POINTS_BY_HALF__;
+        private readonly List<CursorHitTarget> cursorHitTargets = new List<CursorHitTarget>();
 
         public void Draw(DrawingContext drawingContext, Size extents, IReadOnlyList<GraphSeries> series,
             long? viewportStart = null, long? viewportEnd = null)
         {{
+            this.cursorHitTargets.Clear();
             drawingContext.DrawRectangle(Brushes.Transparent, new Pen(Brushes.DimGray, 1), new Rect(extents));
             var gridPen = new Pen(Brushes.DimGray, 0.5);
             for (var division = 1; division < 5; division++)
@@ -1446,8 +1484,10 @@ namespace {namespace}
                     baseColor.R, baseColor.G, baseColor.B);
                 if (drawPoints)
                 {{
+                    var point = new Point(x + (barWidth / 2d), valueY);
                     drawingContext.DrawEllipse(new SolidColorBrush(color), new Pen(Brushes.White, 1d),
-                        new Point(x + (barWidth / 2d), valueY), 5d, 5d);
+                        point, 5d, 5d);
+                    this.cursorHitTargets.Add(new CursorHitTarget(point, item.Name, item.CurrentValue));
                 }}
                 else
                 {{
@@ -1497,6 +1537,7 @@ namespace {namespace}
                 for (var family = 0; family < 2; family++)
                 {{
                     var points = new List<Point>();
+                    var pointItems = new List<GraphSeries>();
                     for (var localIndex = 0; localIndex < items.Count; localIndex++)
                     {{
                         var itemFamily = PairCursorPointsByHalf ? localIndex / halfCount : localIndex % 2;
@@ -1505,6 +1546,7 @@ namespace {namespace}
                         var x = (slot + 0.5d) * slotWidth;
                         var y = extents.Height - (((items[localIndex].CurrentValue - minimum) / range) * extents.Height);
                         points.Add(new Point(x, y));
+                        pointItems.Add(items[localIndex]);
                     }}
 
                     var color = traceColors[((groupIndex * 2) + family) % traceColors.Length];
@@ -1514,9 +1556,12 @@ namespace {namespace}
                     {{
                         drawingContext.DrawLine(pen, points[pointIndex - 1], points[pointIndex]);
                     }}
-                    foreach (var point in points)
+                    for (var pointIndex = 0; pointIndex < points.Count; pointIndex++)
                     {{
+                        var point = points[pointIndex];
                         drawingContext.DrawEllipse(brush, new Pen(Brushes.White, 1d), point, 4d, 4d);
+                        this.cursorHitTargets.Add(new CursorHitTarget(
+                            point, pointItems[pointIndex].Name, pointItems[pointIndex].CurrentValue));
                     }}
                 }}
             }}
@@ -1537,6 +1582,39 @@ namespace {namespace}
             return match.Success && int.TryParse(match.Groups[1].Value, out var index)
                 ? index.ToString(CultureInfo.InvariantCulture)
                 : label;
+        }}
+
+        public bool TryGetCursorPoint(Point point, out string tooltip)
+        {{
+            var target = this.cursorHitTargets
+                .Select(item => new {{ Item = item, Distance =
+                    Math.Pow(item.Point.X - point.X, 2) + Math.Pow(item.Point.Y - point.Y, 2) }})
+                .Where(item => item.Distance <= 100d)
+                .OrderBy(item => item.Distance)
+                .Select(item => item.Item)
+                .FirstOrDefault();
+            if (target == null)
+            {{
+                tooltip = null;
+                return false;
+            }}
+
+            tooltip = $"{{target.Name}}: {{target.Value:G6}}";
+            return true;
+        }}
+
+        private sealed class CursorHitTarget
+        {{
+            public CursorHitTarget(Point point, string name, double value)
+            {{
+                this.Point = point;
+                this.Name = name;
+                this.Value = value;
+            }}
+
+            public Point Point {{ get; }}
+            public string Name {{ get; }}
+            public double Value {{ get; }}
         }}
 
         private void DrawTimeAxes(DrawingContext drawingContext, Size extents,
@@ -1734,14 +1812,14 @@ ATLAS_THEME_RESOURCES = '''
             <Setter Property="Cursor" Value="Hand" />
         </Style>
         <Style TargetType="TextBox">
-            <Setter Property="Background" Value="{{StaticResource RaisedSurfaceBrush}}" />
-            <Setter Property="Foreground" Value="{{StaticResource PrimaryTextBrush}}" />
-            <Setter Property="BorderBrush" Value="{{StaticResource BorderBrush}}" />
-            <Setter Property="CaretBrush" Value="{{StaticResource AccentBrush}}" />
+            <Setter Property="Background" Value="{{Binding DataContext.ThemeSurfaceColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
+            <Setter Property="Foreground" Value="{{Binding DataContext.ThemePrimaryTextColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
+            <Setter Property="BorderBrush" Value="{{Binding DataContext.ThemeBorderColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
+            <Setter Property="CaretBrush" Value="{{Binding DataContext.ThemeAccentColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
             <Setter Property="Padding" Value="8,5" />
         </Style>
         <Style TargetType="CheckBox">
-            <Setter Property="Foreground" Value="{{StaticResource PrimaryTextBrush}}" />
+            <Setter Property="Foreground" Value="{{Binding DataContext.ThemePrimaryTextColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
         </Style>
         <Style x:Key="CardStyle" TargetType="Border">
             <Setter Property="Background" Value="{{Binding DataContext.ThemeSurfaceColor, RelativeSource={{RelativeSource AncestorType=UserControl}}}}" />
@@ -1772,7 +1850,7 @@ ATLAS_THEME_RESOURCES = '''
 '''
 
 VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" FontFamily="{{Binding ThemeFontFamily}}" FontSize="{{Binding ThemeBaseFontSize}}">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" TextElement.FontFamily="{{Binding ThemeFontFamily}}" TextElement.FontSize="{{Binding ThemeBaseFontSize}}">
     <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
         <DockPanel>
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
@@ -1820,14 +1898,14 @@ DEBUG_USER_SETTINGS_TEMPLATE = r'''<Project ToolsVersion="Current" xmlns="http:/
 '''
 
 BASIC_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" FontFamily="{{Binding ThemeFontFamily}}" FontSize="{{Binding ThemeBaseFontSize}}" Margin="0">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" TextElement.FontFamily="{{Binding ThemeFontFamily}}" TextElement.FontSize="{{Binding ThemeBaseFontSize}}" Margin="0">
 {basic_content}
     </Grid>
 </UserControl>
 '''
 
 TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" FontFamily="{{Binding ThemeFontFamily}}" FontSize="{{Binding ThemeBaseFontSize}}">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" TextElement.FontFamily="{{Binding ThemeFontFamily}}" TextElement.FontSize="{{Binding ThemeBaseFontSize}}">
     <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
         <DockPanel>
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
@@ -1855,7 +1933,7 @@ TIMEBASE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
 
 TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
              xmlns:displayPluginLibrary="clr-namespace:DisplayPluginLibrary;assembly=DisplayPluginLibrary"
-             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <DockPanel Background="{{Binding ThemeBackgroundColor}}" FontFamily="{{Binding ThemeFontFamily}}" FontSize="{{Binding ThemeBaseFontSize}}">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <DockPanel Background="{{Binding ThemeBackgroundColor}}" TextElement.FontFamily="{{Binding ThemeFontFamily}}" TextElement.FontSize="{{Binding ThemeBaseFontSize}}">
         <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
 {command_buttons}            <CheckBox Content="Show Legend" IsChecked="{{Binding ShowLegend}}" VerticalAlignment="Center" Margin="8,0,0,0" />
         </StackPanel>
@@ -1898,7 +1976,7 @@ BASIC_PLACEHOLDER_CONTENT = '''            <Border Style="{{StaticResource CardS
                 <StackPanel>
                     <TextBlock Text="{view_class}" Style="{{StaticResource TitleStyle}}"
                                FontSize="22" HorizontalAlignment="Center" />
-                    <Border Height="3" Width="48" Background="{{StaticResource AccentBrush}}"
+                    <Border Height="3" Width="48" Background="{{Binding ThemeAccentColor}}"
                             CornerRadius="2" Margin="0,12,0,0" />
                 </StackPanel>
             </Border>'''
@@ -1920,7 +1998,7 @@ def build_property_control(spec):
     label = html.escape(spec.get('display_name') or command_display_label(spec['name']), quote=True)
     name = spec['name']
     if spec.get('read_only', False):
-        editor = f'<TextBlock Text="{{Binding {name}}}" Foreground="{{StaticResource PrimaryTextBrush}}" />'
+        editor = f'<TextBlock Text="{{Binding {name}}}" Foreground="{{Binding ThemePrimaryTextColor}}" />'
     elif spec['type'] == 'bool':
         editor = f'<CheckBox IsChecked="{{Binding {name}}}" VerticalAlignment="Center" />'
     else:
@@ -1956,7 +2034,7 @@ def build_basic_layout_content(layout, view_class, command_buttons, display_prop
             '{Binding Items}', f'{{Binding {collection_name}}}'
         ).replace('{Binding Name}', f'{{Binding {item_display_field}}}')
     elif layout == 'table':
-        body = f'        <DataGrid ItemsSource="{{Binding {collection_name}}}" AutoGenerateColumns="True" Margin="12" Background="{{StaticResource SurfaceBrush}}" Foreground="{{StaticResource PrimaryTextBrush}}" BorderBrush="{{StaticResource BorderBrush}}" />'
+        body = f'        <DataGrid ItemsSource="{{Binding {collection_name}}}" AutoGenerateColumns="True" Margin="12" Background="{{Binding ThemeSurfaceColor}}" Foreground="{{Binding ThemePrimaryTextColor}}" BorderBrush="{{Binding ThemeBorderColor}}" />'
     elif layout == 'form':
         controls = ''.join(build_property_control(spec) for spec in (display_property_specs or []))
         if not controls:
@@ -1967,7 +2045,7 @@ def build_basic_layout_content(layout, view_class, command_buttons, display_prop
     return f'        <DockPanel>\n{commands}{body}\n        </DockPanel>'
 
 COMPARE_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
-             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" FontFamily="{{Binding ThemeFontFamily}}" FontSize="{{Binding ThemeBaseFontSize}}">
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES + '''    <Grid Background="{{Binding ThemeBackgroundColor}}" TextElement.FontFamily="{{Binding ThemeFontFamily}}" TextElement.FontSize="{{Binding ThemeBaseFontSize}}">
     <ScrollViewer HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
         <DockPanel>
             <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
@@ -2713,6 +2791,7 @@ namespace {namespace}
             Colors.Gold, Colors.Cyan, Colors.Red, Colors.MediumPurple,
         }};
         private readonly GraphRenderer graphRenderer = new GraphRenderer();
+        private readonly DispatcherTimer redrawTimer;
         private {viewmodel_class} viewModel;
         private long? loadedStart;
         private long? loadedEnd;
@@ -2727,8 +2806,17 @@ namespace {namespace}
         public {view_class}()
         {{
             this.InitializeComponent();
+            this.redrawTimer = new DispatcherTimer(DispatcherPriority.Render)
+            {{
+                Interval = TimeSpan.FromMilliseconds(33),
+            }};
+            this.redrawTimer.Tick += (sender, args) =>
+            {{
+                this.redrawTimer.Stop();
+                this.Redraw();
+            }};
             this.DataContextChanged += this.OnDataContextChanged;
-            this.SizeChanged += (sender, args) => this.Redraw();
+            this.SizeChanged += (sender, args) => this.ScheduleRedraw();
             this.GraphVisualLayer.MouseLeftButtonDown += this.OnGraphMouseLeftButtonDown;
             this.GraphVisualLayer.MouseMove += this.OnGraphMouseMove;
             this.GraphVisualLayer.MouseLeftButtonUp += this.OnGraphMouseLeftButtonUp;
@@ -2747,13 +2835,13 @@ namespace {namespace}
                 this.AttachSeries();
             }}
 
-            this.Redraw();
+            this.ScheduleRedraw();
         }}
 
         private void OnSeriesCollectionChanged(object sender, NotifyCollectionChangedEventArgs args)
         {{
             this.AttachSeries();
-            this.Redraw();
+            this.ScheduleRedraw();
         }}
 
         private void AttachSeries()
@@ -2774,9 +2862,10 @@ namespace {namespace}
         {{
             if (args.PropertyName == nameof(TimebaseSeriesViewModel.Values) ||
                 args.PropertyName == nameof(TimebaseSeriesViewModel.Timestamps) ||
-                args.PropertyName == nameof(TimebaseSeriesViewModel.CurrentTimestamp))
+                args.PropertyName == nameof(TimebaseSeriesViewModel.CurrentTimestamp) ||
+                args.PropertyName == "CurrentValue")
             {{
-                this.Redraw();
+                this.ScheduleRedraw();
             }}
         }}
 
@@ -2815,6 +2904,14 @@ namespace {namespace}
                 cursorTimestamp,
                 this.viewportStart,
                 this.viewportEnd));
+        }}
+
+        private void ScheduleRedraw()
+        {{
+            if (!this.redrawTimer.IsEnabled)
+            {{
+                this.redrawTimer.Start();
+            }}
         }}
 
         private void UpdateLoadedRange(IReadOnlyList<GraphSeries> series)
@@ -2867,8 +2964,15 @@ namespace {namespace}
                 var span = this.panOriginEnd - this.panOriginStart;
                 var offset = (long)(-(delta / this.GraphVisualLayer.ActualWidth) * span);
                 this.SetViewport(this.panOriginStart + offset, this.panOriginEnd + offset);
-                this.Redraw();
+                this.ScheduleRedraw();
                 args.Handled = true;
+            }}
+            else
+            {{
+                var point = args.GetPosition(this.GraphVisualLayer);
+                this.GraphVisualLayer.ToolTip = this.graphRenderer.TryGetCursorPoint(point, out var tooltip)
+                    ? tooltip
+                    : null;
             }}
         }}
 
@@ -2958,7 +3062,7 @@ namespace {namespace}
                 this.SetViewport(newStart, newStart + newSpan);
             }}
 
-            this.Redraw();
+            this.ScheduleRedraw();
             args.Handled = true;
         }}
 
@@ -3433,6 +3537,10 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             ),
             compare_graph_sync_call=(
                 '                    this.SyncGraphSeries();'
+                if behavior == BEHAVIOR_COMPARE_SESSIONS and cursor_graph else ''
+            ),
+            compare_graph_update_call=(
+                COMPARE_GRAPH_UPDATE_CALL
                 if behavior == BEHAVIOR_COMPARE_SESSIONS and cursor_graph else ''
             ),
             compare_graph_sync_method=(
