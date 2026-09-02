@@ -2777,6 +2777,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 
@@ -2792,6 +2793,7 @@ namespace {namespace}
         }};
         private readonly GraphRenderer graphRenderer = new GraphRenderer();
         private readonly DispatcherTimer redrawTimer;
+        private readonly ToolTip pointToolTip = new ToolTip {{ Placement = PlacementMode.MousePoint }};
         private {viewmodel_class} viewModel;
         private long? loadedStart;
         private long? loadedEnd;
@@ -2823,6 +2825,7 @@ namespace {namespace}
             this.GraphVisualLayer.MouseRightButtonDown += this.OnGraphMouseRightButtonDown;
             this.GraphVisualLayer.MouseRightButtonUp += this.OnGraphMouseRightButtonUp;
             this.GraphVisualLayer.MouseWheel += this.OnGraphMouseWheel;
+            this.GraphVisualLayer.MouseLeave += (sender, args) => this.pointToolTip.IsOpen = false;
         }}
 
         private void OnDataContextChanged(object sender, DependencyPropertyChangedEventArgs args)
@@ -2918,6 +2921,8 @@ namespace {namespace}
         {{
             if (!UsesTimeAxis)
             {{
+                this.ShowPointTooltip(args.GetPosition(this.GraphVisualLayer));
+                args.Handled = true;
                 return;
             }}
 
@@ -2967,13 +2972,19 @@ namespace {namespace}
                 this.ScheduleRedraw();
                 args.Handled = true;
             }}
-            else
+        }}
+
+        private void ShowPointTooltip(Point point)
+        {{
+            this.pointToolTip.IsOpen = false;
+            if (!this.graphRenderer.TryGetCursorPoint(point, out var tooltip))
             {{
-                var point = args.GetPosition(this.GraphVisualLayer);
-                this.GraphVisualLayer.ToolTip = this.graphRenderer.TryGetCursorPoint(point, out var tooltip)
-                    ? tooltip
-                    : null;
+                return;
             }}
+
+            this.pointToolTip.Content = tooltip;
+            this.pointToolTip.PlacementTarget = this.GraphVisualLayer;
+            this.pointToolTip.IsOpen = true;
         }}
 
         private void OnGraphMouseRightButtonDown(object sender, MouseButtonEventArgs args)

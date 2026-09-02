@@ -894,6 +894,8 @@ class GenerationTests(unittest.TestCase):
         self.assertIn('DispatcherTimer', codebehind)
         self.assertIn('TimeSpan.FromMilliseconds(33)', codebehind)
         self.assertIn('this.graphRenderer.TryGetCursorPoint', codebehind)
+        self.assertIn('this.ShowPointTooltip(args.GetPosition(this.GraphVisualLayer))', codebehind)
+        self.assertIn('private readonly ToolTip pointToolTip', codebehind)
 
     def test_cursor_bar_overlay_requires_cursor_histogram(self):
         with self.assertRaisesRegex(ValueError, 'requires a cursor histogram'):
