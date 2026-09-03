@@ -2922,8 +2922,6 @@ namespace {namespace}
         {{
             if (!UsesTimeAxis)
             {{
-                this.ShowPointTooltip(args.GetPosition(this.GraphVisualLayer));
-                args.Handled = true;
                 return;
             }}
 
@@ -2971,6 +2969,10 @@ namespace {namespace}
                 var offset = (long)(-(delta / this.GraphVisualLayer.ActualWidth) * span);
                 this.SetViewport(this.panOriginStart + offset, this.panOriginEnd + offset);
                 this.ScheduleRedraw();
+                args.Handled = true;
+            }} else if (!UsesTimeAxis)
+            {{
+                this.ShowPointTooltip(args.GetPosition(this.GraphVisualLayer));
                 args.Handled = true;
             }}
         }}
