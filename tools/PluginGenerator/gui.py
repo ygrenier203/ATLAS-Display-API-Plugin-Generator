@@ -1646,7 +1646,7 @@ namespace {namespace}
                 return false;
             }}
 
-            tooltip = $"{{target.Name}}: {{target.Value:G6}}";
+            tooltip = $"{{target.Name[^3..]}}: {{target.Value:G6}}";
             return true;
         }}
 
