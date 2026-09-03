@@ -2034,6 +2034,51 @@ TIME_GRAPH_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
 </UserControl>
 '''
 
+CURSOR_POINTS_VIEW_XAML_TEMPLATE = VIEW_XAML_HEADER + '''
+             xmlns:displayPluginLibrary="clr-namespace:DisplayPluginLibrary;assembly=DisplayPluginLibrary"
+             xmlns:converters="clr-namespace:DisplayPluginLibrary.Converters;assembly=DisplayPluginLibrary"
+             x:Class="{namespace}.{view_class}">''' + ATLAS_THEME_RESOURCES.replace(
+    '</UserControl.Resources>',
+    '        <converters:ColorToSolidColorBrushValueConverter x:Key="ColorToBrushConverter" />\n    </UserControl.Resources>',
+) + '''    <DockPanel Background="{{Binding ThemeBackgroundColor}}" TextElement.FontFamily="{{Binding ThemeFontFamily}}" TextElement.FontSize="{{Binding ThemeBaseFontSize}}">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="12,12,12,6">
+{command_buttons}            <CheckBox Content="Show Legend" IsChecked="{{Binding ShowLegend}}" VerticalAlignment="Center" Margin="8,0,0,0" />
+        </StackPanel>
+{graph_title_block}
+        <Border Style="{{StaticResource CardStyle}}" Padding="4">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <Grid Grid.Row="0">
+                    <displayPluginLibrary:VisualLayer x:Name="GraphVisualLayer" />
+                    <displayPluginLibrary:VisualLayer x:Name="CursorVisualLayer" />
+                </Grid>
+
+                <ItemsControl Grid.Row="1" ItemsSource="{{Binding Series}}" Margin="8,8,8,4"
+                              Visibility="{{Binding ShowLegend, Converter={{StaticResource BoolToVisibilityConverter}}}}">
+                    <ItemsControl.ItemsPanel>
+                        <ItemsPanelTemplate>
+                            <WrapPanel Orientation="Horizontal" />
+                        </ItemsPanelTemplate>
+                    </ItemsControl.ItemsPanel>
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,24,6" VerticalAlignment="Center">
+                                <Border Width="12" Height="12" Background="{{Binding Color, Converter={{StaticResource ColorToBrushConverter}}}}" CornerRadius="2" VerticalAlignment="Center" />
+                                <TextBlock Text="{{Binding Name}}" Style="{{StaticResource CaptionStyle}}" Margin="6,0,0,0" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </Grid>
+        </Border>
+    </DockPanel>
+</UserControl>
+'''
+
 BASIC_PLACEHOLDER_CONTENT = '''            <Border Style="{{StaticResource CardStyle}}"
                     VerticalAlignment="Center" HorizontalAlignment="Center" Padding="32,24">
                 <StackPanel>
@@ -2843,6 +2888,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace {namespace}
 {{
@@ -3467,15 +3513,18 @@ def generate_plugin(name, base_out, include_view=True, include_parameters=True, 
             f'\t\t{{{library_project_guid}}}.Release|x64.Build.0 = Release|x64'
         )
 
+    graph_view_template = (
+        CURSOR_POINTS_VIEW_XAML_TEMPLATE if graph_type == 'cursor-points' else TIME_GRAPH_VIEW_XAML_TEMPLATE
+    )
     if behavior == BEHAVIOR_CURRENT_VALUE:
         viewmodel_template = TIMEBASE_VIEWMODEL_TEMPLATE if cursor_graph else VIEWMODEL_TEMPLATE
-        view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if cursor_graph else VIEW_XAML_TEMPLATE
+        view_template = graph_view_template if cursor_graph else VIEW_XAML_TEMPLATE
     elif behavior in (BEHAVIOR_VISIBLE_RANGE, BEHAVIOR_CURRENT_AND_RANGE):
         viewmodel_template = TIMEBASE_VIEWMODEL_TEMPLATE
-        view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if graph_type != 'none' else TIMEBASE_VIEW_XAML_TEMPLATE
+        view_template = graph_view_template if graph_type != 'none' else TIMEBASE_VIEW_XAML_TEMPLATE
     elif behavior == BEHAVIOR_COMPARE_SESSIONS:
         viewmodel_template = COMPARE_VIEWMODEL_TEMPLATE
-        view_template = TIME_GRAPH_VIEW_XAML_TEMPLATE if cursor_graph else COMPARE_VIEW_XAML_TEMPLATE
+        view_template = graph_view_template if cursor_graph else COMPARE_VIEW_XAML_TEMPLATE
     else:
         viewmodel_template = BASIC_VIEWMODEL_TEMPLATE
         view_template = BASIC_VIEW_XAML_TEMPLATE
