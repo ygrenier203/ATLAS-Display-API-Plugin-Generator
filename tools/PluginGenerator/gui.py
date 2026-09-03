@@ -397,6 +397,7 @@ BASIC_VIEWMODEL_TEMPLATE = '''using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.DataAnnotations;
 using System.Windows.Input;
+using System.Windows.Threading;
 
 {extra_usings}using MAT.Atlas.Client.Presentation.Displays;
 using MAT.Atlas.Client.Presentation.Commands;
