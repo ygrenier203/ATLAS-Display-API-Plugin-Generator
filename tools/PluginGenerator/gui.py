@@ -1534,29 +1534,75 @@ namespace {namespace}
             for (var groupIndex = 0; groupIndex < groups.Count; groupIndex++)
             {{
                 var items = groups[groupIndex].ToList();
-                var halfCount = Math.Max(1, (int)Math.Ceiling(items.Count / 2d));
-                for (var family = 0; family < 2; family++)
+                var count = items.Count;
+                var halfCount = Math.Max(1, (int)Math.Ceiling(count / 2d));
+
+                for (var wave = 0; wave < 4; wave++)
                 {{
+                    int start, end, step;
+
+                    switch (wave)
+                    {{
+                        case 0: // Wave 1: 1 to halfCount (if odd, step +2) -> 0-based: Start 0, Step +2
+                            start = 0;
+                            end = (halfCount % 2 != 0) ? halfCount : halfCount - 1;
+                            step = 2;
+                            break;
+
+                        case 1: // Wave 2: 2 to halfCount (if even, step +2) -> 0-based: Start 1, Step +2
+                            start = 1;
+                            end = (halfCount % 2 == 0) ? halfCount : halfCount - 1;
+                            step = 2;
+                            break;
+
+                        case 2: // Wave 3: count to halfCount (if even, step -2) -> 0-based: Start count-1 or count-2
+                            start = (count % 2 == 0) ? count - 1 : count - 2;
+                            end = (halfCount % 2 == 0) ? halfCount : halfCount + 1;
+                            step = -2;
+                            break;
+
+                        case 3: // Wave 4: count to halfCount (if odd, step -2) -> 0-based: Start count-1 or count-2
+                            start = (count % 2 != 0) ? count - 1 : count - 2;
+                            end = (halfCount % 2 != 0) ? halfCount : halfCount + 1;
+                            step = -2;
+                            break;
+
+                        default:
+                            continue;
+                    }}
+
                     var points = new List<Point>();
                     var pointItems = new List<GraphSeries>();
-                    for (var localIndex = 0; localIndex < items.Count; localIndex++)
+
+                    // Loop through the precise index range calculated for this specific wave
+                    var invertForSecondPart = start > end;
+                    for (var localIndex = start; step > 0 ? localIndex < end : localIndex >= end; localIndex += step)
                     {{
-                        var itemFamily = PairCursorPointsByHalf ? localIndex / halfCount : localIndex % 2;
-                        if (itemFamily != family) continue;
+                        if (localIndex < 0 || localIndex >= count) continue;
+
                         var slot = PairCursorPointsByHalf ? localIndex % halfCount : localIndex / 2;
+                        if (invertForSecondPart)
+                        {{
+                            slot = halfCount - slot;
+                        }}
                         var x = (slot + 0.5d) * slotWidth;
                         var y = extents.Height - (((items[localIndex].CurrentValue - minimum) / range) * extents.Height);
+
                         points.Add(new Point(x, y));
                         pointItems.Add(items[localIndex]);
                     }}
 
-                    var color = traceColors[((groupIndex * 2) + family) % traceColors.Length];
+                    if (points.Count == 0) continue;
+
+                    var color = traceColors[((groupIndex * 4) + wave) % traceColors.Length]; // Multiplied by 4 to accommodate 4 sequential waves per group
                     var brush = new SolidColorBrush(color);
                     var pen = new Pen(brush, 1.5d);
+
                     for (var pointIndex = 1; pointIndex < points.Count; pointIndex++)
                     {{
                         drawingContext.DrawLine(pen, points[pointIndex - 1], points[pointIndex]);
                     }}
+
                     for (var pointIndex = 0; pointIndex < points.Count; pointIndex++)
                     {{
                         var point = points[pointIndex];
