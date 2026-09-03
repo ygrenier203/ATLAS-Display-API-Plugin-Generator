@@ -1520,6 +1520,8 @@ namespace {namespace}
         private void DrawPairedCursorPoints(DrawingContext drawingContext, Size extents,
             IReadOnlyList<GraphSeries> current, double minimum, double maximum)
         {{
+            minimum = Math.Min(20, minimum);
+            maximum = Math.Max(90, maximum);
             var groups = current.GroupBy(item => item.GroupName ?? string.Empty).ToList();
             var largestGroup = groups.Max(group => group.Count());
             var slotCount = Math.Max(1, (int)Math.Ceiling(largestGroup / 2d));
@@ -1543,27 +1545,27 @@ namespace {namespace}
 
                     switch (wave)
                     {{
-                        case 0: // Wave 1: 1 to halfCount (if odd, step +2) -> 0-based: Start 0, Step +2
+                        case 0:
                             start = 0;
-                            end = (halfCount % 2 != 0) ? halfCount : halfCount - 1;
+                            end = halfCount;
                             step = 2;
                             break;
 
-                        case 1: // Wave 2: 2 to halfCount (if even, step +2) -> 0-based: Start 1, Step +2
+                        case 1:
                             start = 1;
-                            end = (halfCount % 2 == 0) ? halfCount : halfCount - 1;
+                            end = halfCount;
                             step = 2;
                             break;
 
-                        case 2: // Wave 3: count to halfCount (if even, step -2) -> 0-based: Start count-1 or count-2
+                        case 2:
                             start = (count % 2 == 0) ? count - 1 : count - 2;
-                            end = (halfCount % 2 == 0) ? halfCount : halfCount + 1;
+                            end = halfCount;
                             step = -2;
                             break;
 
-                        case 3: // Wave 4: count to halfCount (if odd, step -2) -> 0-based: Start count-1 or count-2
-                            start = (count % 2 != 0) ? count - 1 : count - 2;
-                            end = (halfCount % 2 != 0) ? halfCount : halfCount + 1;
+                        case 3:
+                            start = (count % 2 == 0) ? count - 2 : count - 1;
+                            end = halfCount + 1;
                             step = -2;
                             break;
 
@@ -1574,17 +1576,23 @@ namespace {namespace}
                     var points = new List<Point>();
                     var pointItems = new List<GraphSeries>();
 
-                    // Loop through the precise index range calculated for this specific wave
-                    var invertForSecondPart = start > end;
+                    var invertForSecondPart = start >= halfCount;
                     for (var localIndex = start; step > 0 ? localIndex < end : localIndex >= end; localIndex += step)
                     {{
                         if (localIndex < 0 || localIndex >= count) continue;
 
-                        var slot = PairCursorPointsByHalf ? localIndex % halfCount : localIndex / 2;
+                        int slot;
                         if (invertForSecondPart)
                         {{
-                            slot = halfCount - slot - 1;
+                            var normalizedIndex = localIndex - halfCount;
+                            var baseSlot = normalizedIndex % halfCount;
+                            slot = halfCount - baseSlot - 1;
                         }}
+                        else
+                        {{
+                            slot = localIndex % halfCount;
+                        }}
+
                         var x = (slot + 0.5d) * slotWidth;
                         var y = extents.Height - (((items[localIndex].CurrentValue - minimum) / range) * extents.Height);
 
@@ -1594,7 +1602,14 @@ namespace {namespace}
 
                     if (points.Count == 0) continue;
 
-                    var color = traceColors[((groupIndex * 4) + wave) % traceColors.Length]; // Multiplied by 4 to accommodate 4 sequential waves per group
+                    var pairedPoints = points.Zip(pointItems, (p, item) => new {{ Point = p, Item = item }})
+                                             .OrderBy(paired => paired.Point.X)
+                                             .ToList();
+
+                    points = pairedPoints.Select(x => x.Point).ToList();
+                    pointItems = pairedPoints.Select(x => x.Item).ToList();
+
+                    var color = traceColors[((groupIndex * 4) + wave) % traceColors.Length];
                     var brush = new SolidColorBrush(color);
                     var pen = new Pen(brush, 1.5d);
 
@@ -1607,6 +1622,7 @@ namespace {namespace}
                     {{
                         var point = points[pointIndex];
                         drawingContext.DrawEllipse(brush, new Pen(Brushes.White, 1d), point, 4d, 4d);
+
                         this.cursorHitTargets.Add(new CursorHitTarget(
                             point, pointItems[pointIndex].Name, pointItems[pointIndex].CurrentValue));
                     }}
@@ -1617,7 +1633,7 @@ namespace {namespace}
             var categories = new List<string>();
             for (var slot = 0; slot < slotCount; slot++)
             {{
-                var firstIndex = PairCursorPointsByHalf ? slot : slot * 2;
+                var firstIndex = slot;
                 categories.Add(firstIndex < labels.Count ? ExtractSignalIndex(labels[firstIndex].Name) : string.Empty);
             }}
             this.DrawValueAndCategoryAxes(drawingContext, extents, minimum, maximum, categories, false);
