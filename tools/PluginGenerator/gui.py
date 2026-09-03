@@ -1583,7 +1583,7 @@ namespace {namespace}
                         var slot = PairCursorPointsByHalf ? localIndex % halfCount : localIndex / 2;
                         if (invertForSecondPart)
                         {{
-                            slot = halfCount - slot;
+                            slot = halfCount - slot - 1;
                         }}
                         var x = (slot + 0.5d) * slotWidth;
                         var y = extents.Height - (((items[localIndex].CurrentValue - minimum) / range) * extents.Height);
